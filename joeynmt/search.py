@@ -574,12 +574,12 @@ def fcfs_beam_search(model: Model, beam_size: int,
             ], -1).reshape(remaining_batch_size, -1, step+2)
 
         # init `alive_seq` and `topk_batch_index` for the following processes
-        alive_seq = torch.zeros(remaining_batch_size, beam_size, step+2, dtype=torch.long)
-        topk_batch_index = torch.zeros([remaining_batch_size, beam_size], dtype=torch.long)
+        alive_seq = torch.zeros(remaining_batch_size, beam_size, step+2, dtype=torch.long, device=device)
+        topk_batch_index = torch.zeros([remaining_batch_size, beam_size], dtype=torch.long, device=device)
 
         # save finished hypotheses, renew `alive_seq` and `topk_log_probs`,
         # and check whether `end_condition` is True
-        end_condition = torch.full([remaining_batch_size], fill_value=False)
+        end_condition = torch.full([remaining_batch_size], fill_value=False, device=device)
         for b in range(remaining_batch_size):
             b_org = batch_offset[b]
             alive_seq_list = []
