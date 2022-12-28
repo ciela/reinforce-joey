@@ -908,7 +908,7 @@ def run_batch(model: Model, batch: Batch, max_output_length: int,
     else:  # beam search
         stacked_output, stacked_attention_scores = fcfs_beam_search(
             model=model,
-            size=beam_size,
+            beam_size=beam_size,
             encoder_output=encoder_output,
             encoder_hidden=encoder_hidden,
             src_mask=batch.src_mask,
