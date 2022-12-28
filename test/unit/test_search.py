@@ -2,7 +2,7 @@ import torch
 import numpy as np
 
 from joeynmt.search import greedy, recurrent_greedy, transformer_greedy
-from joeynmt.search import beam_search
+from joeynmt.search import beam_search, fcfs_beam_search, vanilla_beam_search
 from joeynmt.decoders import RecurrentDecoder, TransformerDecoder
 from joeynmt.encoders import RecurrentEncoder
 from joeynmt.embeddings import Embeddings
@@ -62,6 +62,25 @@ class TestSearchTransformer(TestSearch):
                       src_embed=emb, trg_embed=emb,
                       src_vocab=self.vocab, trg_vocab=self.vocab)
         return src_mask, model, encoder_output, encoder_hidden
+
+    def test_transformer_fcfs_beam5(self):
+        batch_size = 3
+        beam_size = 7
+        alpha = 1.
+        max_output_length = 10
+        src_mask, model, encoder_output, encoder_hidden = self._build(
+            batch_size=batch_size)
+        output, attention_scores = fcfs_beam_search(
+            beam_size=beam_size, src_mask=src_mask, n_best=1,
+            max_output_length=max_output_length, model=model, alpha=alpha,
+            encoder_output=encoder_output, encoder_hidden=encoder_hidden)
+        # Transformer beam doesn't return attention scores
+        self.assertIsNone(attention_scores)
+        # batch x time
+        # now it produces EOS, so everything after gets cut off
+        if beam_size >= 7:
+            self.assertEqual(output.shape, (batch_size, 1))
+            np.testing.assert_equal(output, np.tile([[3]],batch_size).transpose())
 
     def test_transformer_greedy(self):
         batch_size = 2
