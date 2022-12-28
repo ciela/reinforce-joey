@@ -637,7 +637,7 @@ def fcfs_beam_search(model: Model, beam_size: int,
         alive_seq = alive_seq.index_select(0, unfinished)                # (remaining_batch_size, beam_size, hyp_len)
 
         # reshape `alive_seq` to its original size
-        alive_seq = alive_seq.reshape(remaining_batch_size*beam_size, step+2)  # (remaining_batch_size*beam_size, hyp_len)
+        alive_seq = alive_seq.reshape(unfinished.size(0) * beam_size, step+2)  # (remaining_batch_size*beam_size, hyp_len)
 
         # reorder indices, outputs and masks
         select_ids = topk_batch_index.view(-1)
