@@ -560,9 +560,6 @@ def fcfs_beam_search(model: Model, beam_size: int,
         top2k_beam_origin_ids = top2k_ids.floor_divide(trg_vocab_size)  # (remaining_batch_size, 2*beam_size)
         top2k_vocab_ids = top2k_ids.fmod(trg_vocab_size)  # (remaining_batch_size, 2*beam_size)
 
-        if step + 1 == max_output_length:
-            top2k_vocab_ids.fill_(eos_index)
-
         # map beam_index to batch_index in the flat representation
         batch_index = (
             top2k_beam_origin_ids                               # (remaining_batch_size, 2*beam_size)
@@ -590,7 +587,7 @@ def fcfs_beam_search(model: Model, beam_size: int,
             batch_index_list = []
             is_list_full = False
             for seq, log_prob, score, b_index in zip(top2k_seqs[b], top2k_log_probs[b], top2k_scores[b], batch_index[b]):
-                if seq[-1] == eos_index:
+                if (seq[-1]==eos_index).item() | step+1==max_output_length:
                     hypotheses[b_org].append(
                         (score, seq[1:])  # ignore start_token
                     )
