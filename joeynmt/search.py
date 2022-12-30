@@ -587,7 +587,7 @@ def fcfs_beam_search(model: Model, beam_size: int,
             batch_index_list = []
             is_list_full = False
             for seq, log_prob, score, b_index in zip(top2k_seqs[b], top2k_log_probs[b], top2k_scores[b], batch_index[b]):
-                if (seq[-1]==eos_index).item() | step+1==max_output_length:
+                if (seq[-1]==eos_index).item() or (step+1==max_output_length):
                     hypotheses[b_org].append(
                         (score, seq[1:])  # ignore start_token
                     )
@@ -658,9 +658,9 @@ def fcfs_beam_search(model: Model, beam_size: int,
     # from results to stacked outputs
     assert n_best == 1
     # only works for n_best=1 for now
-    final_outputs = pad_and_stack_hyps([r[0].cpu().numpy() for r in
-                                        results["predictions"]],
-                                       pad_value=pad_index)
+    final_outputs = pad_and_stack_hyps(
+        [r[0].cpu().numpy() for r in results["predictions"]],
+        pad_value=pad_index)
 
     return final_outputs, None
 
