@@ -788,7 +788,8 @@ def vanilla_beam_search(model: Model, beam_size: int,
 
         # compute length penalty
         if alpha > -1:
-            length_penalty_prev = ((5.0 + step) / 6.0) ** alpha
+            if step == 0:
+                length_penalty_prev = ((5.0 + step) / 6.0) ** alpha
             length_penalty = ((5.0 + (step + 1)) / 6.0) ** alpha
             score_adjust_coeff = length_penalty_prev / length_penalty
         else:
@@ -813,7 +814,6 @@ def vanilla_beam_search(model: Model, beam_size: int,
         # 'topk_scores': (remaining_batch_size, beam_size) -> (remaining_batch_size*beam_size, 1)
         topk_scores = topk_scores.reshape(-1, 1)
         curr_scores = score_adjust_coeff * topk_scores + 1/length_penalty * log_probs
-        curr_scores = curr_scores.clone()  # (remaining_batch_size * beam_size, trg_vocab_size)
 
         # flatten log_probs into a list of possibilities
         curr_scores = curr_scores.reshape(-1, beam_size * trg_vocab_size)  # (remaining_batch_size, beam_size, trg_vocab_size)
@@ -880,6 +880,7 @@ def vanilla_beam_search(model: Model, beam_size: int,
         topk_scores = topk_scores.index_select(0, unfinished)  # (remaining_batch_size, beam_size)
         batch_offset = batch_offset.index_select(0, unfinished)  # (remaining_batch_size)
         alive_seq = topk_seqs.index_select(0, unfinished)  # (remaining_batch_size, beam_size, hyp_len)
+        is_finished = is_finished.index_select(0, unfinished)  # (remaining_batch_size, beam_size)
 
         # update remaining_batch_size
         remaining_batch_size = len(batch_offset)
@@ -891,6 +892,9 @@ def vanilla_beam_search(model: Model, beam_size: int,
         select_indices = batch_index.view(-1)
         encoder_output = encoder_output.index_select(0, select_indices)
         src_mask = src_mask.index_select(0, select_indices)
+
+        # update previous length prenalty with current one
+        length_penalty_prev = length_penalty
 
     def pad_and_stack_hyps(hyps, pad_value):
         filled = np.ones((len(hyps), max([h.shape[0] for h in hyps])),
@@ -943,7 +947,7 @@ def run_batch(model: Model, batch: Batch, max_output_length: int,
             encoder_hidden=encoder_hidden)
         # batch, time, max_src_length
     else:  # beam search
-        stacked_output, stacked_attention_scores = fcfs_beam_search(
+        stacked_output, stacked_attention_scores = vanilla_beam_search(
             model=model,
             beam_size=beam_size,
             encoder_output=encoder_output,
