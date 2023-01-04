@@ -789,7 +789,7 @@ def vanilla_beam_search(model: Model, beam_size: int,
         # compute length penalty
         if alpha > -1:
             if step == 0:
-                length_penalty_prev = ((5.0 + step) / 6.0) ** alpha
+                length_penalty_prev = 1.0
             length_penalty = ((5.0 + (step + 1)) / 6.0) ** alpha
             score_adjust_coeff = length_penalty_prev / length_penalty
         else:
