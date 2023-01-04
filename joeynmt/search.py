@@ -304,7 +304,7 @@ def beam_search(model: Model, size: int,
         curr_scores = log_probs.clone()
 
         # compute length penalty
-        if alpha > -1:
+        if alpha > 0:
             length_penalty = ((5.0 + (step + 1)) / 6.0) ** alpha
             curr_scores /= length_penalty
 
@@ -314,7 +314,7 @@ def beam_search(model: Model, size: int,
         # pick currently best top k hypotheses (flattened order)
         topk_scores, topk_ids = curr_scores.topk(size, dim=-1)
 
-        if alpha > -1:
+        if alpha > 0:
             # recover original log probs
             topk_log_probs = topk_scores * length_penalty
         else:
@@ -539,7 +539,7 @@ def fcfs_beam_search(model: Model, beam_size: int,
         curr_scores = log_probs.clone()
 
         # compute length penalty
-        if alpha > -1:
+        if alpha > 0:
             length_penalty = ((5.0 + (step + 1)) / 6.0) ** alpha
             curr_scores /= length_penalty
 
@@ -550,7 +550,7 @@ def fcfs_beam_search(model: Model, beam_size: int,
         # `topk_scores` and `topk_ids` shape: (remaining_batch_size, 2*beam_size)
         top2k_scores, top2k_ids = curr_scores.topk(2*beam_size, dim=-1)
 
-        if alpha > -1:
+        if alpha > 0:
             # recover original log probs
             top2k_log_probs = top2k_scores * length_penalty  # (remaining_batch_size, 2*beam_size)
         else:
@@ -787,7 +787,7 @@ def vanilla_beam_search(model: Model, beam_size: int,
         log_probs = F.log_softmax(logits, dim=-1).squeeze(1)   # (remaining_batch_size * beam_size, trg_vocab_size)
 
         # compute length penalty
-        if alpha > -1:
+        if alpha > 0:
             if step == 0:
                 length_penalty_prev = 1.0
             length_penalty = ((5.0 + (step + 1)) / 6.0) ** alpha
