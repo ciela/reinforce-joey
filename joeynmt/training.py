@@ -89,7 +89,7 @@ class TrainManager:
             self.entropy_logger = make_retro_logger("{}/entropy.log".format(self.model_dir), "entropy_logger")
             self.probability_logger = make_retro_logger("{}/probability.log".format(self.model_dir), "probability_logger")
 
-        if self.pickle_logs: 
+        if self.pickle_logs:
             self.collected_gold_ranks = []
             self.collected_top10_probabilities = []
             self.collected_highest_probabilities = []
@@ -110,12 +110,12 @@ class TrainManager:
         self.n_gpu = torch.cuda.device_count() if self.use_cuda else 0
         self.device = torch.device("cuda" if self.use_cuda else "cpu")
 
-        if self.reinforcement_learning:  
+        if self.reinforcement_learning:
             self.model.loss_function = ReinforceLoss(baseline=self.baseline, use_cuda=self.use_cuda, reward=self.reward)
-        else: 
+        else:
             self.model.loss_function = XentLoss(pad_index=self.model.pad_index,
                                  smoothing=self.label_smoothing)
-        
+
 
         self.normalization = train_config.get("normalization", "batch")
         if self.normalization not in ["batch", "tokens", "none"]:
@@ -417,7 +417,7 @@ class TrainManager:
             # validate before training begins
             if self.stats.steps % self.validation_freq == 0:
                 self._validate(valid_data, epoch_no)
-                
+
             self.model.train()
             if self.method == "a2c":
                 self.critic.train()
@@ -518,25 +518,25 @@ class TrainManager:
                 self.critic.train()
 
         # get loss
-        if self.reinforcement_learning: 
+        if self.reinforcement_learning:
             batch_loss, distribution, _, _ = self.model(
-            return_type=self.method, 
+            return_type=self.method,
             critic=self.critic,
             src=batch.src, trg=batch.trg,
             trg_input=batch.trg_input, src_mask=batch.src_mask,
             src_length=batch.src_length, trg_mask=batch.trg_mask,
             max_output_length=self.max_output_length,
-            temperature = self.temperature, 
+            temperature = self.temperature,
             samples=self.samples, alpha = self.alpha,
             add_gold=self.add_gold,
             topk=self.topk,
-            log_probabilities=self.log_probabilities, 
+            log_probabilities=self.log_probabilities,
             pickle_logs=self.pickle_logs)
 
             if self.method == "a2c":
                 losses = batch_loss
-                batch_loss = losses[0] 
-                critic_loss = losses[1] 
+                batch_loss = losses[0]
+                critic_loss = losses[1]
 
         else:
             batch_loss, distribution, _, _ = self.model(
@@ -576,7 +576,7 @@ class TrainManager:
                 scaled_loss.backward()
         else:
             norm_batch_loss.backward(retain_graph=True)
-        # perform critic backward and optimization step 
+        # perform critic backward and optimization step
         # TODO move out of fcn
         if self.method == "a2c":
             #norm_batch_loss.backward(retain_graph=True)
@@ -759,28 +759,28 @@ class TrainManager:
     def _log_reinforcement_learning(self, valid_logs, epoch_no, valid_hypotheses):
         entropy, gold_strings, predicted_strings, highest_words, total_probability, \
                 highest_word, highest_prob, gold_probabilities, gold_token_ranks, rewards, old_bleus = valid_logs
-        
+
         self.probability_logger.info(
                 "Epoch %3d Step: %8d \n",
                 epoch_no + 1, self.stats.steps)
         self.entropy_logger.info(
                 "Epoch %3d Step: %8d \n"
-                "Entropy: %12.8f",  
+                "Entropy: %12.8f",
                 epoch_no + 1, self.stats.steps, entropy)
-        
+
         total_probability = [torch.stack(el) for el in total_probability if el != []]
         highest_prob = [torch.stack(el) for el in highest_prob if el != []]
         gold_probabilities = [torch.stack(el) for el in gold_probabilities if el != []]
         average_total_prob = torch.mean(torch.stack([torch.mean(el) for el in total_probability]))
         average_highest_prob = torch.mean(torch.stack([torch.mean(el) for el in highest_prob]))
         average_gold_prob = torch.mean(torch.stack([torch.mean(el) for el in gold_probabilities]))
-        
+
         self.probability_logger.info(
         "Average Top10 Probability: %2.4f \n"
         "Average Highest Probability: %2.4f \n"
         "Average Gold Probability: %2.4f \n", \
                 average_total_prob, average_highest_prob, average_gold_prob)
-        
+
         if self.pickle_logs:
             self.collected_top10_probabilities.append(total_probability)
             self.collected_highest_probabilities.append(highest_prob)
@@ -794,7 +794,7 @@ class TrainManager:
                 pickle.dump(self.collected_gold_probabilities, f)
             with open(self.model_dir+"/gold_ranks.pickle", "wb") as f:
                 pickle.dump(self.collected_gold_ranks, f)
-        
+
     def _store_outputs(self, hypotheses: List[str]) -> None:
         """
         Write current validation outputs to file in `self.model_dir.`
@@ -833,7 +833,7 @@ class TrainManager:
                 is_best = score > self.best_ckpt_score
             return is_best
 
-    
+
 
 
 def train(cfg_file: str) -> None:
@@ -860,7 +860,7 @@ def train(cfg_file: str) -> None:
     rl_method = cfg["training"]["reinforcement_learning"].get("method", False)
     # build an encoder-decoder model
     model = build_model(cfg["model"], src_vocab=src_vocab, trg_vocab=trg_vocab)
-    if rl_method=="a2c": 
+    if rl_method=="a2c":
         critic_model = build_model(cfg["model"], src_vocab=src_vocab, trg_vocab=trg_vocab, is_critic=True)
 
     # for training management, e.g. early stopping and model selection

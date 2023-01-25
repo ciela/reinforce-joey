@@ -77,7 +77,7 @@ class Model(nn.Module):
             src_length: Tensor, temperature: float, topk: int, log_probabilities: False, pickle_logs:False):
 
         """ Computes forward pass for Policy Gradient aka REINFORCE
-        
+
         Encodes source, then step by step decodes and samples token from output distribution.
         Calls the loss function to compute the BLEU and loss
 
@@ -102,7 +102,7 @@ class Model(nn.Module):
         trg_mask = src_mask.new_ones([1, 1, 1])
         distributions = []
         log_probs = 0
-        # init hidden state in case of using rnn decoder  
+        # init hidden state in case of using rnn decoder
         hidden = self.decoder._init_hidden(encoder_hidden) \
             if hasattr(self.decoder,'_init_hidden') else 0
         attention_vectors = None
@@ -146,11 +146,11 @@ class Model(nn.Module):
         return (batch_loss, log_peakiness(self.pad_index, self.trg_vocab, topk, distributions,
         trg, batch_size, max_output_length, gold_strings, predicted_strings, rewards, old_bleus)) \
         if log_probabilities else (batch_loss, [])
-        
-    def mrt(self, max_output_length, src: Tensor, trg: Tensor, src_mask: Tensor, src_length: Tensor, 
+
+    def mrt(self, max_output_length, src: Tensor, trg: Tensor, src_mask: Tensor, src_length: Tensor,
             temperature: float, samples: int, alpha: float, topk: int, add_gold=False, log_probabilities=False, pickle_logs=False):
         """ Computes forward pass for MRT
-        
+
         Encodes source, samples multiple output sequences.
         Coputes rewards and MRT-loss
 
@@ -184,8 +184,8 @@ class Model(nn.Module):
         if hasattr(self.decoder,'_init_hidden'):
             hidden = self.decoder._init_hidden(encoder_hidden)
             if len(hidden)==2:
-                hidden = (hidden[0].repeat(1,samples,1), hidden[1].repeat(1,samples,1)) 
-            else: 
+                hidden = (hidden[0].repeat(1,samples,1), hidden[1].repeat(1,samples,1))
+            else:
                 hidden = hidden.repeat(1,samples,1)
         else:
             hidden = (0,0)
@@ -230,12 +230,12 @@ class Model(nn.Module):
                     break
         ys = ys[:, 1:]
         all_sequences = torch.stack(torch.split(ys, batch_size))
-        sentence_probabs= list(torch.split(total_prob, batch_size))    
+        sentence_probabs= list(torch.split(total_prob, batch_size))
         predicted_outputs = [self.trg_vocab.arrays_to_sentences(arrays=sequ,
                                                         cut_at_eos=True) for sequ in all_sequences]
         gold_output = self.trg_vocab.arrays_to_sentences(arrays=trg,
                                                     cut_at_eos=True)
-        predicted_sentences = [[join_strings(wordlist) for wordlist in predicted_output] 
+        predicted_sentences = [[join_strings(wordlist) for wordlist in predicted_output]
             for predicted_output in predicted_outputs]
         gold_strings = [join_strings(wordlist) for wordlist in gold_output]
         all_gold_sentences = [gold_strings]*samples
@@ -253,11 +253,11 @@ class Model(nn.Module):
             trg, batch_size, max_output_length, gold_strings, predicted_sentences, \
                 Qs_to_return, rewards, mrt=True, samples=samples)) \
                 if log_probabilities else (batch_loss, [])
-    
+
     def ned_a2c(self, max_output_length, src: Tensor, trg: Tensor, src_mask: Tensor,
                         src_length: Tensor, temperature: float, critic: nn.Module, topk: int, log_probabilities=False, pickle_logs=False):
         """ Computes forward pass for NED-A2C
-        
+
         Encodes source, step by step decodes and samples actor output.
         For each step decodes critic output given actor outputs as target
         Computes actor loss and critic loss
@@ -276,7 +276,7 @@ class Model(nn.Module):
 
         if max_output_length is None:
             max_output_length = int(max(src_length.cpu().numpy()) * 1.5)
-        batch_size = src_mask.size(0) 
+        batch_size = src_mask.size(0)
         trg_mask = src_mask.new_ones([1, 1, 1])
         # init actor parameters
         encoder_output, encoder_hidden = self._encode(
@@ -325,7 +325,7 @@ class Model(nn.Module):
             for index in range(len(sampled_word_list)):
                 if sampled_word_list[index] == self.eos_index:
                     if eos_dict[index] == -1:
-                        eos_dict[index] = i 
+                        eos_dict[index] = i
             # decode with critic, using actor as target
             critic_logit, critic_hidden, critic_attention_scores, critic_attention_vectors = critic.decoder(
                 trg_embed=self.trg_embed(sampled_word.view(-1,1)),
@@ -627,7 +627,7 @@ def build_model(cfg: dict = None,
     dec_dropout = cfg["decoder"].get("dropout", 0.)
     dec_emb_dropout = cfg["decoder"]["embeddings"].get("dropout", dec_dropout)
     if cfg["decoder"].get("type", "recurrent") == "transformer":
-        if is_critic: 
+        if is_critic:
             decoder = CriticTransformerDecoder(
             **cfg["decoder"], encoder=encoder, vocab_size=len(trg_vocab),
             emb_size=trg_embed.embedding_dim, emb_dropout=dec_emb_dropout)
@@ -636,7 +636,7 @@ def build_model(cfg: dict = None,
                 **cfg["decoder"], encoder=encoder, vocab_size=len(trg_vocab),
                 emb_size=trg_embed.embedding_dim, emb_dropout=dec_emb_dropout)
     else:
-        if is_critic: 
+        if is_critic:
             decoder = CriticDecoder(
             **cfg["decoder"], encoder=encoder, vocab_size=len(trg_vocab),
             emb_size=trg_embed.embedding_dim, emb_dropout=dec_emb_dropout)
@@ -650,7 +650,7 @@ def build_model(cfg: dict = None,
                   src_vocab=src_vocab, trg_vocab=trg_vocab)
     #if not False:
     # tie softmax layer with trg embeddings
-    if not is_critic: 
+    if not is_critic:
         if cfg.get("tied_softmax", False):
             if trg_embed.lut.weight.shape == \
                     model.decoder.output_layer.weight.shape:
@@ -661,7 +661,7 @@ def build_model(cfg: dict = None,
                     "For tied_softmax, the decoder embedding_dim and decoder "
                     "hidden_size must be the same."
                     "The decoder must be a Transformer.")
-                
+
     # custom initialization of model parameters
     initialize_model(model, cfg, src_padding_idx, trg_padding_idx)
 
