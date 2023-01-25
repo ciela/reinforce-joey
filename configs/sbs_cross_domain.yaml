@@ -1,0 +1,93 @@
+name: "pg-cross-domain"
+
+data:
+  src: "de"
+  trg: "en"
+  train: "test/data/iwslt14/train.bpe.32000"
+  test: "test/data/iwslt14/test.bpe.32000"
+  level: "bpe"
+  lowercase: True
+  max_sent_length: 62
+  src_vocab: "pretrained_wmt15/src_vocab.txt"
+  trg_vocab: "pretrained_wmt15/trg_vocab.txt"
+
+testing:
+  beam_size: 5
+
+training:
+  load_model: "pretrained_wmt15/best.ckpt"
+  reset_best_ckpt: True            # if True, reset the tracking of the best checkpoint and scores. Use for domain adaptation or fine-tuning with new metrics or dev data.
+  reset_scheduler: True            # if True, overwrite scheduler in loaded checkpoint with parameters specified in this config. Use for domain adaptation or fine-tuning.
+  reset_optimizer: True
+  random_seed: 42
+  optimizer: "adam"
+  normalization: "tokens"
+  adam_betas: [0.9, 0.999]
+  scheduling: "plateau"
+  patience: 5
+  decrease_factor: 0.7
+  loss: "crossentropy"
+  learning_rate: 0.0001
+  learning_rate_min: 0.00000005
+  weight_decay: 0.0
+  label_smoothing: 0.1
+  batch_size: 256
+  batch_type: "token"
+  early_stopping_metric: "eval_metric"
+  epochs: 10
+  validation_freq: 500
+  logging_freq: 500
+  track_peakiness_freq: 500
+  eval_metric: "bleu"
+  model_dir: "models/sbs_cross_domain"
+  overwrite: True
+  shuffle: True
+  use_cuda: True
+  max_output_length: 100
+  print_valid_sents: [0, 1, 2, 3, 4]
+  keep_last_ckpts: 5
+
+  reinforcement_learning:
+    use_reinforcement_learning: True
+    method: "sbs"
+    log_probabilities: True
+    topk: 100
+    hyperparameters:
+      temperature: 1
+      alpha: 1
+      reward: "bleu"
+      samples: 5
+      baseline: "average_reward_baseline"
+
+model:
+  initializer: "xavier"
+  embed_initializer: "xavier"
+  embed_init_gain: 1.0
+  init_gain: 1.0
+  bias_initializer: "zeros"
+  tied_embeddings: True
+  tied_softmax: True
+  encoder:
+    type: "transformer"
+    num_layers: 6
+    num_heads: 4
+    embeddings:
+      embedding_dim: 128
+      scale: True
+      dropout: 0.
+        # typically ff_size = 4 x hidden_size
+    hidden_size: 128
+    ff_size: 512
+    dropout: 0.3
+  decoder:
+    type: "transformer"
+    num_layers: 6
+    num_heads: 4
+    embeddings:
+      embedding_dim: 128
+      scale: True
+      dropout: 0.
+        # typically ff_size = 4 x hidden_size
+    hidden_size: 128
+    ff_size: 512
+    dropout: 0.3
