@@ -4,7 +4,7 @@ data:
   src: "de"
   trg: "en"
   train: "test/data/iwslt14/train.bpe.32000"
-  dev: "test/data/iwslt14/valid.bpe.32000"
+  # dev: "test/data/iwslt14/valid.bpe.32000"
   test: "test/data/iwslt14/test.bpe.32000"
   level: "bpe"
   lowercase: True
@@ -14,7 +14,6 @@ data:
 
 testing:
   beam_size: 5
-  alpha: 1.0
 
 training:
   load_model: "pretrained_wmt15/best.ckpt"
