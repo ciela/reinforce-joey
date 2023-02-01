@@ -707,7 +707,7 @@ class TrainManager:
             opened_file.write(
                 "Steps: {}\tLoss: {:.5f}\tPPL: {:.5f}\t{}: {:.5f}\t"
                 "LR: {:.8f}\t{}\n".format(
-                    self.stats.steps, valid_loss, valid_ppl, eval_metric,
+                    self.stats.steps, valid_loss.item(), valid_ppl.item(), eval_metric,
                     valid_score, current_lr, "*" if new_best else ""))
 
     def _log_parameters_list(self) -> None:
@@ -836,7 +836,7 @@ class TrainManager:
 
 
 
-def train(cfg_file: str) -> None:
+def train(cfg_file: str, alpha: float) -> None:
     """
     Main training function. After training, also test on test data if given.
 
@@ -897,7 +897,7 @@ def train(cfg_file: str) -> None:
     datasets_to_test = {"dev": dev_data, "test": test_data,
                         "src_vocab": src_vocab, "trg_vocab": trg_vocab}
     test(cfg_file, ckpt=ckpt, output_path=output_path,
-         datasets=datasets_to_test)
+         datasets=datasets_to_test, alpha=alpha)
 
 
 if __name__ == "__main__":

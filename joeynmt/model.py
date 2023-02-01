@@ -315,7 +315,7 @@ class Model(nn.Module):
 
         # decode tokens with soft beam search
         for l in range(1, max_output_length):
-            log.debug('=' * 5 + f' {l} ' + '=' * 5)
+            # log.debug('=' * 5 + f' {l} ' + '=' * 5)
 
             # eval start
             previous_words = ys_tokens[:, -1].view(-1, 1) if hasattr(self.decoder,'_init_hidden') else ys_tokens
@@ -340,8 +340,8 @@ class Model(nn.Module):
             # filter adopted indexes and tokens
             filtered_indexes = to_adopt.nonzero()
             adopted_indexes = filtered_indexes[:, 0]
-            log.debug(f'{adopted_indexes.size(0)=}')
-            if not (0 < adopted_indexes.size(0) <= 128):
+            # log.debug(f'{adopted_indexes.size(0)=}')
+            if not (0 < adopted_indexes.size(0) <= batch_size * 5):  # TODO how to fix max adoption set size
                 # TODO: how to handle out of range size
                 continue
             prev_ys_tokens = ys_tokens.index_select(0, adopted_indexes)
