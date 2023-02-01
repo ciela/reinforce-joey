@@ -8,7 +8,8 @@ import torch
 import torch.nn as nn
 from torch import Tensor
 import torch.nn.functional as F
-from torch.distributions import Categorical
+from torch.distributions import Categorical, Gumbel, Uniform
+from logzero import logger as log
 
 from joeynmt.initialization import initialize_model
 from joeynmt.embeddings import Embeddings
@@ -255,8 +256,8 @@ class Model(nn.Module):
                 if log_probabilities else (batch_loss, [])
 
     def soft_beam_search(self, max_output_length, src: Tensor, trg: Tensor, src_mask: Tensor,
-            src_length: Tensor, temperature: float, topk: int, log_probabilities: False, pickle_logs:False):
-
+            src_length: Tensor, temperature: float, topk: int, log_probabilities: False, pickle_logs:False,
+            alpha: float = 1., gumbel_scale: float = 1.):
         """ Computes forward pass for Soft Beam Search
 
         Encodes source, then step by step decodes and samples token from output distribution.
@@ -270,16 +271,35 @@ class Model(nn.Module):
         :param temperature: softmax temperature
         :param topk: consider top-k parameters for logging
         :param log_probabilities: log probabilities
+        :param alpha: length normalization controller
+        :param gumbel_scale: scale parameter of gumbel distribution
         :return: loss, logs
         """
+        dev = src.device
+        uniform_dist = Uniform(
+            low=torch.tensor([0.], device=dev),
+            high=torch.tensor([1.], device=dev),
+        )
+        gumbel_dist = Gumbel(
+            torch.tensor([0.], device=dev),
+            torch.tensor([gumbel_scale], device=dev),
+            validate_args=False,
+        )
 
-        encoder_output, encoder_hidden = self._encode(src, src_length,
-            src_mask)
+        def adoption_model(log_prob: Tensor, tau: Tensor):
+            return 1 - gumbel_dist.cdf(-(log_prob - tau))
+
+        def length_norm(l: int) -> float:
+            return (5 + l) ** alpha / (5 + 1) ** alpha
+
+        encoder_output, encoder_hidden = self._encode(src, src_length, src_mask)
         # if maximum output length is not globally specified, adapt to src len
         if max_output_length is None:
             max_output_length = int(max(src_length.cpu().numpy()) * 1.5)
         batch_size = src_mask.size(0)
-        ys = encoder_output.new_full([batch_size, 1], self.bos_index, dtype=torch.long)
+        # define sets of sequences and scores (cumulative sum of score function)
+        ys_tokens = encoder_output.new_full([batch_size, 1], self.bos_index, dtype=torch.long)
+        ys_scores = encoder_output.new_full([batch_size, 1], 0., dtype=torch.float)
         trg_mask = src_mask.new_ones([1, 1, 1])
         distributions = []
         log_probs = 0
@@ -288,9 +308,17 @@ class Model(nn.Module):
             if hasattr(self.decoder,'_init_hidden') else 0
         attention_vectors = None
         finished = src_mask.new_zeros((batch_size)).byte()
-        # decode tokens
-        for _ in range(max_output_length):
-            previous_words = ys[:, -1].view(-1, 1) if hasattr(self.decoder,'_init_hidden') else ys
+
+        # run beam search and get thresholds
+        # TODO replace with Morimura-san's impl.
+        threasholds = torch.randn(max_output_length) * 20
+
+        # decode tokens with soft beam search
+        for l in range(1, max_output_length):
+            log.debug('=' * 5 + f' {l} ' + '=' * 5)
+
+            # eval start
+            previous_words = ys_tokens[:, -1].view(-1, 1) if hasattr(self.decoder,'_init_hidden') else ys_tokens
             logits, hidden, _, attention_vectors = self.decoder(
                 trg_embed=self.trg_embed(previous_words),
                 encoder_output=encoder_output,
@@ -301,29 +329,46 @@ class Model(nn.Module):
                 prev_att_vector=attention_vectors,
                 trg_mask=trg_mask
             )
-            logits = logits[:, -1]/temperature
-            distrib = Categorical(logits=logits)
-            distributions.append(distrib)
-            next_word = distrib.sample()
-            log_probs += distrib.log_prob(next_word)
-            ys = torch.cat([ys, next_word.unsqueeze(-1)], dim=1)
-            # prevent early stopping in decoding when logging gold token
-            if not pickle_logs:
-                # check if previous symbol was <eos>
-                is_eos = torch.eq(next_word, self.eos_index)
-                finished += is_eos
-                # stop predicting if <eos> reached for all elements in batch
-                if (finished >= 1).sum() == batch_size:
-                    break
-        ys = ys[:, 1:]
-        predicted_output = self.trg_vocab.arrays_to_sentences(arrays=ys,
+            logits = logits[:, -1] / temperature
+            log_probs += torch.log_softmax(logits, dim=1)  # sampling probability of pg
+            log_probs_norm = log_probs / length_norm(l)  # apply length normalization with current length l
+            # eval end
+
+            # adopion start
+            score = adoption_model(log_probs_norm, threasholds[l])  # (batch_size, token_size)
+            to_adopt = score >= uniform_dist.sample(score.size()).squeeze(-1)  # (batch_size, token_size)
+            # filter adopted indexes and tokens
+            filtered_indexes = to_adopt.nonzero()
+            adopted_indexes = filtered_indexes[:, 0]
+            log.debug(f'{adopted_indexes.size(0)=}')
+            if not (0 < adopted_indexes.size(0) <= 128):
+                # TODO: how to handle out of range size
+                continue
+            prev_ys_tokens = ys_tokens.index_select(0, adopted_indexes)
+            next_ys_tokens = filtered_indexes[:, 1].unsqueeze(1)
+            prev_ys_scores = ys_scores.index_select(0, adopted_indexes)
+            next_ys_scores = score[to_adopt].unsqueeze(1)
+            # append adopted tokens next to increased previous tokens
+            ys_tokens = torch.cat((prev_ys_tokens, next_ys_tokens), dim=1)
+            # add adoption scores to increased previous scores
+            ys_scores = prev_ys_scores + next_ys_scores
+            # update other adopted tensors for next decoder I/O
+            encoder_output = encoder_output.index_select(0, adopted_indexes)
+            src_mask = src_mask.index_select(0, adopted_indexes)
+            log_probs = log_probs.index_select(0, adopted_indexes)
+            trg = trg.index_select(0, adopted_indexes)
+            distributions.append(Categorical(logits=logits.index_select(0, adopted_indexes)))
+            # adoption end
+
+        ys_tokens = ys_tokens[:, 1:]
+        predicted_output = self.trg_vocab.arrays_to_sentences(arrays=ys_tokens,
                                                         cut_at_eos=True)
         gold_output = self.trg_vocab.arrays_to_sentences(arrays=trg,
                                                     cut_at_eos=True)
         predicted_strings = [join_strings(wordlist) for wordlist in predicted_output]
         gold_strings = [join_strings(wordlist) for wordlist in gold_output]
         # get reinforce loss
-        batch_loss, rewards, old_bleus = self.loss_function(predicted_strings, gold_strings,  log_probs)
+        batch_loss, rewards, old_bleus = self.loss_function(predicted_strings, gold_strings,  ys_scores)
         return (batch_loss, log_peakiness(self.pad_index, self.trg_vocab, topk, distributions,
         trg, batch_size, max_output_length, gold_strings, predicted_strings, rewards, old_bleus)) \
         if log_probabilities else (batch_loss, [])
