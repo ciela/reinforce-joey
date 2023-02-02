@@ -12,7 +12,7 @@ from joeynmt.attention import BahdanauAttention, LuongAttention
 from joeynmt.encoders import Encoder
 from joeynmt.helpers import freeze_params, ConfigurationError, subsequent_mask
 from joeynmt.transformer_layers import PositionalEncoding, \
-    TransformerDecoderLayer 
+    TransformerDecoderLayer
 
 
 # pylint: disable=abstract-method
@@ -640,7 +640,7 @@ class CriticDecoder(Decoder):
             rnn_input = torch.cat([prev_embed, prev_att_vector], dim=2)
         else:
             rnn_input = prev_embed
-        
+
         rnn_input = self.emb_dropout(rnn_input)
 
         # rnn_input: batch x 1 x emb+2*enc_size
@@ -828,7 +828,7 @@ class CriticDecoder(Decoder):
 
     def __repr__(self):
         return "RecurrentDecoder(rnn=%r, attention=%r)" % (
-            self.rnn, self.attention)           
+            self.rnn, self.attention)
 
 
 # pylint: disable=arguments-differ,too-many-arguments
@@ -889,6 +889,8 @@ class TransformerDecoder(Decoder):
                 unroll_steps: int = None,
                 hidden: Tensor = None,
                 trg_mask: Tensor = None,
+                finished: Tensor = None,
+                eos_index: int = -1,
                 **kwargs):
         """
         Transformer decoder forward pass.
@@ -918,7 +920,9 @@ class TransformerDecoder(Decoder):
 
         x = self.layer_norm(x)
         output = self.output_layer(x)
-
+        if finished is not None and finished.size(0) > 0:
+            output[finished, :, :] = float('-inf')
+            output[finished, :, eos_index] = 0.
         return output, x, None, None
 
     def __repr__(self):

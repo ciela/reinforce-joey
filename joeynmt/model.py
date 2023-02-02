@@ -286,7 +286,10 @@ class Model(nn.Module):
             validate_args=False,
         )
 
-        def adoption_model(log_prob: Tensor, tau: Tensor):
+        def initial_finished() -> Tensor:
+            return src_mask.new_zeros([0], dtype=torch.long)
+
+        def adoption_model(log_prob: Tensor, tau: Tensor) -> Tensor:
             return 1 - gumbel_dist.cdf(-(log_prob - tau))
 
         def length_norm(l: int) -> float:
@@ -307,7 +310,7 @@ class Model(nn.Module):
         hidden = self.decoder._init_hidden(encoder_hidden) \
             if hasattr(self.decoder,'_init_hidden') else 0
         attention_vectors = None
-        finished = src_mask.new_zeros((batch_size)).byte()
+        finished = initial_finished()
 
         # run beam search and get thresholds
         # TODO replace with Morimura-san's impl.
@@ -315,8 +318,6 @@ class Model(nn.Module):
 
         # decode tokens with soft beam search
         for l in range(1, max_output_length):
-            # log.debug('=' * 5 + f' {l} ' + '=' * 5)
-
             # eval start
             previous_words = ys_tokens[:, -1].view(-1, 1) if hasattr(self.decoder,'_init_hidden') else ys_tokens
             logits, hidden, _, attention_vectors = self.decoder(
@@ -327,12 +328,17 @@ class Model(nn.Module):
                 unroll_steps=1,
                 hidden=hidden,
                 prev_att_vector=attention_vectors,
-                trg_mask=trg_mask
+                trg_mask=trg_mask,
+                finished=finished,
+                eos_index=self.eos_index,
             )
             logits = logits[:, -1] / temperature
             log_probs += torch.log_softmax(logits, dim=1)  # sampling probability of pg
             log_probs_norm = log_probs / length_norm(l)  # apply length normalization with current length l
             # eval end
+
+            # re-initialize finished
+            finished = initial_finished()
 
             # adopion start
             score = adoption_model(log_probs_norm, threasholds[l])  # (batch_size, token_size)
@@ -340,7 +346,6 @@ class Model(nn.Module):
             # filter adopted indexes and tokens
             filtered_indexes = to_adopt.nonzero()
             adopted_indexes = filtered_indexes[:, 0]
-            # log.debug(f'{adopted_indexes.size(0)=}')
             if not (0 < adopted_indexes.size(0) <= batch_size * 5):  # TODO how to fix max adoption set size
                 # TODO: how to handle out of range size
                 continue
@@ -359,6 +364,11 @@ class Model(nn.Module):
             trg = trg.index_select(0, adopted_indexes)
             distributions.append(Categorical(logits=logits.index_select(0, adopted_indexes)))
             # adoption end
+
+            # update finished if exists
+            pre_finished = (next_ys_tokens == self.eos_index).nonzero()[:, 0]
+            if pre_finished.size(0) > 0:
+                finished = pre_finished
 
         ys_tokens = ys_tokens[:, 1:]
         predicted_output = self.trg_vocab.arrays_to_sentences(arrays=ys_tokens,
