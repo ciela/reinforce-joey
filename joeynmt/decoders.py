@@ -909,7 +909,7 @@ class TransformerDecoder(Decoder):
         assert trg_mask is not None, "trg_mask required for Transformer"
 
         # if there are alredy finished seqs, use unfinished seqs only
-        if use_unfinished := finished is not None and (fin_size := finished.size(0)) > 0:
+        if not_using_finished := (finished is not None and (fin_size := finished.size(0)) > 0):
             # if all finished, return fixed outputs
             if fin_size == trg_embed.size(0):
                 output_finished = trg_embed.new_full(
@@ -919,9 +919,12 @@ class TransformerDecoder(Decoder):
                 output_finished[:, :, eos_index] = 0.
                 return output_finished, None, None, None
             # filter unfinished trg_embed, encoder_output and src_mask
-            _, counts = torch.cat(
+            uniques, counts = torch.cat(
                 (torch.arange(trg_embed.size(0), device=trg_embed.device), finished),
             ).unique(return_counts=True)
+            unfinished = uniques[counts == 1]
+            unfin_size = unfinished.size(0)
+            assert fin_size + unfin_size == trg_embed.size(0)
             assert fin_size == trg_embed[counts > 1].size(0)
             trg_embed = trg_embed[counts == 1]
             encoder_output = encoder_output[counts == 1]
@@ -941,13 +944,19 @@ class TransformerDecoder(Decoder):
         output = self.output_layer(x)
 
         # finally, concatenate finished and unfinshed outputs
-        if use_unfinished:
+        if not_using_finished:
             output_finished = output.new_full(
                 (fin_size, output.size(1), output.size(2)),
                 float('-inf'), dtype=torch.float,
             )
             output_finished[:, :, eos_index] = 0.
-            output = torch.cat((output, output_finished))
+            # merge two outputs
+            output_merged = output.new_zeros(
+                (fin_size + unfin_size, output.size(1), output.size(2))
+            )
+            output = output_merged\
+                .index_add(0, unfinished, output)\
+                .index_add(0, finished, output_finished)
 
         return output, x, None, None
 
