@@ -733,8 +733,8 @@ def vanilla_beam_search(model: Model, beam_size: int,
 
     # Give full probability to the first beam on the first step; score := log prob.
     # since the only option of the first token is the BOS token.
-    topk_scores = torch.zeros(batch_size, beam_size, device=device)  # (remaining_batch_size, beam_size)
-    topk_scores[:, 1:] = float("-inf")
+    beam_score = torch.zeros(batch_size, beam_size, device=device)  # (remaining_batch_size, beam_size)
+    beam_score[:, 1:] = float("-inf")
 
     # Structure that holds finished hypotheses.
     hypotheses = [[] for _ in range(batch_size)]
@@ -798,16 +798,16 @@ def vanilla_beam_search(model: Model, beam_size: int,
         # correct `log_probs` and `score_adjust_coeff` for the score calculation
         if is_finished.any():
             # `is_finished` shape : (remaining_batch_size, beam_size)
-            finished_ids = is_finished.reshape(-1).nonzero().reshape(-1)
+            finished_index = is_finished.reshape(-1).nonzero().reshape(-1)
 
             # correct `log_probs` so that the finished sequence never gets a vocab other than EOS
-            log_probs[finished_ids] = float('-inf')
-            log_probs[finished_ids, eos_index] = 0.0
+            log_probs[finished_index] = float('-inf')
+            log_probs[finished_index, eos_index] = 0.0
 
             # correct `score_adjust_coeff` so that the scores of the finished sequences do not change
             # `score_adjust_coeff` shape: (1) -> (remaining_batch_size * beam_size)
             score_adjust_coeff *= torch.ones((remaining_batch_size*beam_size,1), device=device)
-            score_adjust_coeff[finished_ids] = 1.0
+            score_adjust_coeff[finished_index] = 1.0
 
         # calc corr_scores
         # 'beam_score': (remaining_batch_size, beam_size) -> (remaining_batch_size*beam_size, 1)
@@ -831,16 +831,16 @@ def vanilla_beam_search(model: Model, beam_size: int,
             beam_origin_index                                # (remaining_batch_size, beam_size)
             + beam_offset[:remaining_batch_size].unsqueeze(1)   # (remaining_batch_size, 1)
         )  # (remaining_batch_size, beam_size)
-        select_ids = batch_index.view(-1)  # (remaining_batch_size * beam_size)
+        select_index = batch_index.view(-1)  # (remaining_batch_size * beam_size)
 
         # append the latest prediction
         beam_seq = torch.cat([
-            beam_seq.index_select(0, select_ids),        # (remaining_batch_size * beam_size, step)
+            beam_seq.index_select(0, select_index),        # (remaining_batch_size * beam_size, step)
             vocab_index.view(-1, 1)                          # (remaining_batch_size * beam_size, 1)
         ], -1).reshape(remaining_batch_size, -1, step+1)  # (remaining_batch_size, beam_size, step+1)
 
         # update `is_finished`; (remaining_batch_size, beam_size)
-        is_finished = is_finished.view(-1).index_select(0, select_ids).reshape(remaining_batch_size, beam_size)
+        is_finished = is_finished.view(-1).index_select(0, select_index).reshape(remaining_batch_size, beam_size)
         is_finished = vocab_index.eq(eos_index) | is_finished | beam_score.eq(-np.inf)
         if step + 1 == max_output_length:
             is_finished.fill_(True)
