@@ -941,7 +941,7 @@ def compute_threshold_by_vanilla_beam_search(model: Model, beam_size: int,
 
     # init
     bos_index = model.bos_index
-    eos_index = 4#model.eos_index
+    eos_index = model.eos_index
     pad_index = model.pad_index
     trg_vocab_size = model.decoder.output_size
     device = encoder_output.device
