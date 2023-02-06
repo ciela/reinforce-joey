@@ -589,10 +589,11 @@ class Model(nn.Module):
 
             # calc thresholds
             if step < max_output_length-1 and n_best < beam_size:
+                alive_index_old = 0
                 alive_seq_old = alive_seq
                 alive_seq = torch.full([0,step+1], bos_index, dtype=torch.long, device=device)
                 alive_score = torch.zeros([0], device=device)
-                for alive_index_old, batch_index in enumerate(range(batch_size)):
+                for batch_index in range(batch_size):
 
                     if not are_all_beam_finished[batch_index]:
                         thresholds[batch_index, step] = (beam_score[batch_index,-1] + runnerup_score[batch_index]) /2
@@ -630,6 +631,7 @@ class Model(nn.Module):
                             th_dn = th_up - 0.1
                         thresholds[batch_index, step] = (th_up + th_dn) /2
                         alive_seq = torch.vstack([alive_seq, seq])
+                        alive_index_old += 1
 
                 # backup beam_seq
                 beam_seq_of_all_steps[step] = beam_seq
