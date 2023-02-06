@@ -503,17 +503,17 @@ def fcfs_beam_search(model: Model, beam_size: int,
         "gold_score": [0] * batch_size,
     }
 
-    for step in range(max_output_length):
+    for step in range(1,max_output_length):
         # This decides which part of the predicted sentence we feed to the
         # decoder to make the next prediction.
         # For Transformer, we feed the complete predicted sentence so far.
         # For Recurrent models, only feed the previous target word prediction
-        decoder_input = alive_seq  # complete prediction so far; (remaining_batch_size * beam_size, step+1)
+        decoder_input = alive_seq  # complete prediction so far; (remaining_batch_size * beam_size, step)
 
         # expand current hypotheses
         # decode one single step
         with torch.no_grad():
-            # logits: scores before final softmax, (remaining_batch_size * beam_size, step+1, trg_vocab_size)
+            # logits: scores before final softmax, (remaining_batch_size * beam_size, step, trg_vocab_size)
             logits, _, _, _ = model(
                 return_type="decode",
                 encoder_output=encoder_output,
@@ -540,15 +540,15 @@ def fcfs_beam_search(model: Model, beam_size: int,
 
         # compute length penalty
         if alpha > 0:
-            length_penalty = ((5.0 + (step + 1)) / 6.0) ** alpha
+            length_penalty = ((5.0 + step) / 6.0) ** alpha
             curr_scores /= length_penalty
 
         # flatten log_probs into a list of possibilities
         curr_scores = curr_scores.reshape(-1, beam_size * trg_vocab_size)  # (remaining_batch_size, beam_size, trg_vocab_size)
 
         # pick currently best top 2*k hypotheses (flattened order)
-        # `topk_scores` and `topk_ids` shape: (remaining_batch_size, 2*beam_size)
-        top2k_scores, top2k_ids = curr_scores.topk(2*beam_size, dim=-1)
+        # `topk_scores` and `topk_index` shape: (remaining_batch_size, 2*beam_size)
+        top2k_scores, top2k_index = curr_scores.topk(2*beam_size, dim=-1)
 
         if alpha > 0:
             # recover original log probs
@@ -557,24 +557,24 @@ def fcfs_beam_search(model: Model, beam_size: int,
             top2k_log_probs = top2k_scores.clone()  # (remaining_batch_size, 2*beam_size)
 
         # reconstruct beam origin and true vocab ids from flattened order
-        top2k_beam_origin_ids = top2k_ids.floor_divide(trg_vocab_size)  # (remaining_batch_size, 2*beam_size)
-        top2k_vocab_ids = top2k_ids.fmod(trg_vocab_size)  # (remaining_batch_size, 2*beam_size)
+        top2k_beam_origin_index = top2k_index.floor_divide(trg_vocab_size)  # (remaining_batch_size, 2*beam_size)
+        top2k_vocab_index = top2k_index.fmod(trg_vocab_size)  # (remaining_batch_size, 2*beam_size)
 
         # map beam_index to batch_index in the flat representation
         batch_index = (
-            top2k_beam_origin_ids                               # (remaining_batch_size, 2*beam_size)
+            top2k_beam_origin_index                              # (remaining_batch_size, 2*beam_size)
             + beam_offset[:remaining_batch_size].unsqueeze(1)   # (remaining_batch_size, 1)
         )  # (remaining_batch_size, 2*beam_size)
-        select_ids = batch_index.view(-1)  # (remaining_batch_size * 2*beam_size)
+        select_index = batch_index.view(-1)  # (remaining_batch_size * 2*beam_size)
 
         # generate topk_seqs by appending the latest prediction to alive_seq
         top2k_seqs = torch.cat([
-            alive_seq.index_select(dim=0, index=select_ids),   # (remaining_batch_size * 2 * beam_size, step+1)
-            top2k_vocab_ids.view(-1, 1)                        # (remaining_batch_size * 2 * beam_size, 1)
-            ], -1).reshape(remaining_batch_size, -1, step+2)   # (remaining_batch_size, 2 * beam_size, step+2)
+            alive_seq.index_select(dim=0, index=select_index),   # (remaining_batch_size * 2 * beam_size, step)
+            top2k_vocab_index.view(-1, 1)                        # (remaining_batch_size * 2 * beam_size, 1)
+            ], -1).reshape(remaining_batch_size, -1, step+1)   # (remaining_batch_size, 2 * beam_size, step+1)
 
         # init `alive_seq` and `topk_batch_index` for the following processes
-        alive_seq = torch.zeros(remaining_batch_size, beam_size, step+2, dtype=torch.long, device=device)
+        alive_seq = torch.zeros(remaining_batch_size, beam_size, step+1, dtype=torch.long, device=device)
         topk_batch_index = torch.zeros([remaining_batch_size, beam_size], dtype=torch.long, device=device)
 
         # save finished hypotheses, renew `alive_seq` and `topk_log_probs`,
@@ -640,12 +640,12 @@ def fcfs_beam_search(model: Model, beam_size: int,
         remaining_batch_size = len(batch_offset)
 
         # reshape `alive_seq` to its original size
-        alive_seq = alive_seq.reshape(remaining_batch_size * beam_size, step+2)  # (remaining_batch_size*beam_size, hyp_len)
+        alive_seq = alive_seq.reshape(remaining_batch_size * beam_size, step+1)  # (remaining_batch_size*beam_size, hyp_len)
 
         # reorder indices, outputs and masks
-        select_ids = topk_batch_index.view(-1)
-        encoder_output = encoder_output.index_select(0, select_ids)
-        src_mask = src_mask.index_select(0, select_ids)
+        select_index = topk_batch_index.view(-1)
+        encoder_output = encoder_output.index_select(0, select_index)
+        src_mask = src_mask.index_select(0, select_index)
 
     def pad_and_stack_hyps(hyps, pad_value):
         filled = np.ones((len(hyps), max([h.shape[0] for h in hyps])),
