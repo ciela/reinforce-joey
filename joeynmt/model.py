@@ -10,6 +10,7 @@ from torch import Tensor
 import torch.nn.functional as F
 from torch.distributions import Categorical, Gumbel, Uniform
 from logzero import logger as log
+import numpy as np
 
 from joeynmt.initialization import initialize_model
 from joeynmt.embeddings import Embeddings
@@ -17,7 +18,7 @@ from joeynmt.encoders import Encoder, RecurrentEncoder, TransformerEncoder
 from joeynmt.decoders import Decoder, RecurrentDecoder, TransformerDecoder, CriticDecoder, CriticTransformerDecoder
 from joeynmt.constants import PAD_TOKEN, EOS_TOKEN, BOS_TOKEN
 from joeynmt.vocabulary import Vocabulary
-from joeynmt.helpers import ConfigurationError, log_peakiness, join_strings
+from joeynmt.helpers import ConfigurationError, log_peakiness, join_strings, tile
 from joeynmt.metrics import bleu
 
 
@@ -313,8 +314,10 @@ class Model(nn.Module):
         finished = initial_finished()
 
         # run beam search and get thresholds
-        # TODO replace with Morimura-san's impl.
-        threasholds = torch.randn(max_output_length) * 20
+        with torch.no_grad():
+            threasholds, _ = self._compute_threshold_by_vanilla_beam_search(
+                5, encoder_output, encoder_hidden, src_mask, max_output_length, alpha
+            )
 
         # decode tokens with soft beam search
         for l in range(1, max_output_length):
@@ -382,6 +385,268 @@ class Model(nn.Module):
         return (batch_loss, log_peakiness(self.pad_index, self.trg_vocab, topk, distributions,
         trg, batch_size, max_output_length, gold_strings, predicted_strings, rewards, old_bleus)) \
         if log_probabilities else (batch_loss, [])
+
+    def _compute_threshold_by_vanilla_beam_search(self, beam_size: int,
+                                                encoder_output: Tensor, encoder_hidden: Tensor,
+                                                src_mask: Tensor, max_output_length: int,
+                                                alpha: float, n_best: int = None) -> (np.array, np.array):
+        """
+        Compute thresholds for soft beam policy based on vanilla_beam_search with size k.
+        :param model:
+        :param beam_size: size of the beam
+        :param encoder_output:
+        :param encoder_hidden:
+        :param src_mask:
+        :param max_output_length:
+        :param alpha: `alpha` factor for length penalty
+        :param n_best: return this many hypotheses, <= beam
+        :return:
+            - thresholds: torch.tensor (max_output_length),
+            - beam_seq_of_all_steps: [beam_seq(step=0), ..., beam_seq(step=max_output_length-1)]
+        """
+        assert beam_size > 0, 'Beam size must be >0.'
+        if n_best is None:
+            n_best = beam_size
+        else:
+            assert n_best <= beam_size, f'Can only return {beam_size} best hypotheses.'
+
+        # init
+        bos_index = self.bos_index
+        eos_index = 4#model.eos_index
+        pad_index = self.pad_index
+        trg_vocab_size = self.decoder.output_size
+        device = encoder_output.device
+        batch_size = src_mask.size(0)
+
+        # Recurrent models only: initialize RNN hidden state
+        # pylint: disable=protected-access
+        encoder_output_beam = tile(encoder_output.contiguous(), beam_size, dim=0)  # (batch_size * beam_size, src_len, enc_hidden_size)
+        encoder_output_alive = encoder_output.contiguous()  # (batch_size, src_len, enc_hidden_size)
+        src_mask_beam = tile(src_mask, beam_size, dim=0)  # (batch_size * beam_size, 1, src_len)
+        src_mask_alive = src_mask  # (batch_size, 1, src_len)
+
+        # Transformer only: create target mask
+        trg_mask = src_mask.new_ones([1, 1, 1])  # transformer only
+        if isinstance(self, torch.nn.DataParallel):
+            trg_mask = torch.stack(
+                [src_mask.new_ones([1, 1]) for _ in self.device_ids])
+
+        # numbering elements in the extended batch, i.e. beam size copies of each batch element
+        beam_offset = torch.arange(0, batch_size * beam_size,
+                                step=beam_size,
+                                dtype=torch.long,
+                                device=device)
+
+        # keeps track of the beam hypotheses to expand for each element
+        beam_seq = torch.full(
+            [batch_size * beam_size, 1],
+            bos_index,
+            dtype=torch.long,
+            device=device)  # (batch_size * beam_size, hyp_len) ... now hyp_len = 1
+
+        # keeps track of the scores of the beam hypotheses
+        beam_score = torch.zeros(batch_size, beam_size, device=device)  # (batch_size, beam_size)
+        # give full probability to the first beam on the first step; score := log 1 * coeff = 0,
+        # since the only option of the first token is the BOS token.
+        beam_score[:, 1:] = float("-inf")
+
+        # keeps flag whether the all beam is finished
+        are_all_beam_finished =torch.full(
+            [batch_size], False, dtype=torch.bool, device=device
+        )  # (batch_size)
+
+        # size of finished batch
+        finished_batch_size = 0
+
+        # keeps track of unfinished hypotheses for the case that all beam hypotheses are finished
+        alive_seq = torch.full([0,1], bos_index, dtype=torch.long, device=device)  # (finished_batch_size, hpy_len) ... for now (0,1)
+
+        # keeps threshold of each step
+        thresholds = torch.full(
+            [batch_size, max_output_length], -float('inf'),
+            dtype=torch.float,
+            device=device)  # (batch_size, max_output_length)
+
+        # keeps results of each step of beam hypotheses
+        beam_seq_of_all_steps = [[] for _ in range(max_output_length)]  # [beam_seq at step 0, ... , beam_seq at step max_output_length-1]
+        beam_seq_of_all_steps[0] = beam_seq.reshape(batch_size,beam_size,1)
+
+        # indicator if each beam seq is finished
+        beam_finished = torch.full((batch_size, beam_size),
+                                False,
+                                dtype=torch.bool,
+                                device=device)  # (batch_size, beam_size)
+
+        for step in range(1,max_output_length):
+            # This decides which part of the predicted sentence we feed to the decoder to make the next prediction.
+            # For Transformer, we feed the complete predicted sentence so far.
+            # For Recurrent models, only feed the previous target word prediction
+            encoder_output = torch.vstack([encoder_output_beam, encoder_output_alive[are_all_beam_finished]])
+            src_mask = torch.vstack([src_mask_beam, src_mask_alive[are_all_beam_finished]])
+            decoder_input = torch.vstack([beam_seq, alive_seq])  # (batch_size * beam_size + finished_batch_size, step)
+
+            # expand current hypotheses
+            # decode one single step
+            with torch.no_grad():
+                # logits: scores before final softmax; (batch_size * beam_size + finished_batch_size, step, trg_vocab_size)
+                logits, _, _, _ = self(
+                    return_type="decode",
+                    encoder_output=encoder_output,
+                    encoder_hidden=None,  # only for initializing decoder_hidden
+                    src_mask=src_mask,
+                    trg_input=decoder_input,  # trg_embed = embed(decoder_input)
+                    decoder_hidden=None,  # don't need to keep it for transformer
+                    att_vector=None,  # don't need to keep it for transformer
+                    unroll_steps=1,
+                    trg_mask=trg_mask  # subsequent mask for Transformer only
+                )
+
+            # For the Transformer we made predictions for all time steps up to
+            # this point, so we only want to know about the last time step.
+            logits = logits[:, -1]  # (batch_size * beam_size + finished_batch_size, trg_vocab_size)
+
+            # compute log probability over trg vocab given a previous sequence
+            log_probs = F.log_softmax(logits, dim=-1).squeeze(1)  # (batch_size * beam_size + finished_batch_size, trg_vocab_size)
+            beam_vocab_score = log_probs[:(batch_size * beam_size), :]
+            alive_vocab_score = log_probs[(batch_size * beam_size):, :]
+
+            # compute length penalty
+            if alpha > 0:
+                if step == 1:
+                    length_penalty_prev = 1.0
+                length_penalty = ((5.0 + step) / 6.0) ** alpha
+                score_adjust_coeff = length_penalty_prev / length_penalty
+            else:
+                length_penalty = 1.0
+                score_adjust_coeff = 1.0
+
+            # apply length penalty to 'alive_vocab_score'
+            if finished_batch_size > 0:
+                # 'alive_vocab_score': (finished_batch_size, trg_vocab_size)
+                alive_vocab_score = score_adjust_coeff * alive_score + 1/length_penalty * alive_vocab_score
+
+            # correct `score_adjust_coeff` for  `beam_vocab_score`
+            if beam_finished.any():
+                # `beam_finished` shape : (batch_size, beam_size)
+                finished_ids = beam_finished.reshape(-1).nonzero().reshape(-1)
+
+                # correct `log_probs` so that the finished sequence never gets a vocab other than EOS
+                log_probs[finished_ids] = float('-inf')
+                log_probs[finished_ids, eos_index] = 0.0
+
+                # correct `score_adjust_coeff` so that the scores of the finished sequences do not change
+                # `score_adjust_coeff` shape: (1) -> (batch_size * beam_size + finished_batch_size)
+                score_adjust_coeff *= torch.ones((batch_size*beam_size+finished_batch_size,1), device=device)
+                score_adjust_coeff[finished_ids] = 1.0
+
+            # apply length penalty to `beam_vocab_score`
+            # 'beam_score': (batch_size, beam_size) -> (batch_size*beam_size, 1)
+            beam_score = beam_score.reshape(-1, 1)
+            # 'beam_vocab_score': (batch_size*beam_size, trg_vocab_size)
+            beam_vocab_score = score_adjust_coeff * beam_score + 1/length_penalty * beam_vocab_score
+
+            # flatten 'beam_vocab_score':  (batch_size*beam_size, trg_vocab_size) -> (batch_size, beam_size*trg_vocab_size)
+            beam_vocab_score = beam_vocab_score.reshape(batch_size, beam_size * trg_vocab_size)
+
+            # pick currently best top k hypotheses as beam set (flattened order)
+            # `aug_beam_score` and `aug_beam_ids` shape: (batch_size, beam_size+1)
+            # 'aug' is the abbreviation for 'augmented'.
+            aug_beam_score, aug_beam_index = beam_vocab_score.topk(beam_size+1, dim=-1, sorted=True)
+
+            # reconstruct beam origin and true word ids from flattened order
+            beam_origin_index = aug_beam_index.floor_divide(trg_vocab_size)  # (batch_size, beam_size+1)
+            word_index = aug_beam_index.fmod(trg_vocab_size)  # (batch_size, beam_size+1)
+
+            # compute `arg_beam_finished`; (batch_size, beam_size+1)
+            aug_beam_finished = word_index.eq(eos_index) | aug_beam_score.eq(-np.inf)
+
+            # map beam_index to selected_index in the flat representation
+            select_index = (
+                beam_origin_index           # (batch_size, beam_size+1)
+                + beam_offset.unsqueeze(1)  # (batch_size, 1)
+            )  # (batch_size, beam_size)
+            select_index = select_index.view(-1)  # (batch_size * (beam_size+1))
+
+            # append the latest prediction
+            aug_beam_seq = torch.cat([
+                beam_seq.index_select(0, select_index),  # (batch_size * (beam_size+1), step)
+                word_index.view(-1, 1)                   # (batch_size * (beam_size+1), 1)
+            ], -1).reshape(batch_size, beam_size+1, step + 1)    # (batch_size, beam_size+1, step+1)
+
+            # separate results into 'beam_*' and 'runnerup_*'
+            beam_seq_old = beam_seq  # this will be used in the process "calc thresholds"
+            beam_score = aug_beam_score[:, :beam_size]        # (batch_size, beam_size)
+            beam_finished = aug_beam_finished[:, :beam_size]  # (batch_size, beam_size)
+            beam_seq = aug_beam_seq[:, :beam_size, :]         # (batch_size, beam_size, step+1)
+            runnerup_score = aug_beam_score[:, -1]        # (batch_size)
+            runnerup_finished = aug_beam_finished[:, -1]  # (batch_size)
+            runnerup_seq = aug_beam_seq[:, -1, :]         # (batch_size, step+1)
+
+            # if step + 1 == max_output_length:
+            #     beam_finished.fill_(True)
+
+            # compute the flag whether the all beam is finished
+            are_all_beam_finished_new = beam_finished.all(dim=-1)  # (batch_size)
+
+            # calc thresholds
+            if step < max_output_length-1 and n_best < beam_size:
+                alive_index_old = 0
+                alive_seq_old = alive_seq
+                alive_seq = torch.full([0,step+1], bos_index, dtype=torch.long, device=device)
+                alive_score = torch.zeros([0], device=device)
+                for batch_index in range(batch_size):
+
+                    if not are_all_beam_finished[batch_index]:
+                        thresholds[batch_index, step] = (beam_score[batch_index,-1] + runnerup_score[batch_index]) /2
+
+                        # find unfinished sequence
+                        if are_all_beam_finished_new[batch_index]:
+                            if not runnerup_finished[batch_index]:
+                                seq = runnerup_seq[batch_index]
+                            else:
+                                sorted_index = beam_vocab_score[batch_index].argsort(descending=True)  # (beam_size*trg_vocab_size)
+                                word_index = sorted_index.fmod(trg_vocab_size)
+                                unfinished = ~ word_index.eq(eos_index)
+                                first_unfinished_index = (unfinished * torch.arange(unfinished.shape[0],0,-1)).argmax()
+                                beam_origin_index = sorted_index[first_unfinished_index].floor_divide(trg_vocab_size)
+                                seq = torch.cat([
+                                    beam_seq_old[beam_origin_index],
+                                    word_index[first_unfinished_index].unsqueeze(-1)
+                                ])  # (step+1)
+                            alive_seq = torch.vstack([alive_seq, seq])
+
+                    else:
+                        # prep
+                        score, word_index = alive_vocab_score[alive_index_old].sort(descending=True)  # (trg_vocab_size)
+                        unfinished = ~ word_index.eq(eos_index)
+                        first_unfinished_index = (unfinished * torch.arange(unfinished.shape[0], 0, -1)).argmax()
+                        seq = torch.cat([
+                            alive_seq_old[alive_index_old],
+                            word_index[first_unfinished_index].unsqueeze(-1)
+                        ])  # (step+1)
+                        # comp threshold and alive_seq
+                        th_up = beam_score[batch_index,-1]
+                        try:
+                            th_dn = score[score<th_up].max()
+                        except RuntimeError:  # for the case that all scores are over the th_up
+                            th_dn = th_up - 0.1
+                        thresholds[batch_index, step] = (th_up + th_dn) /2
+                        alive_seq = torch.vstack([alive_seq, seq])
+                        alive_index_old += 1
+
+                # backup beam_seq
+                beam_seq_of_all_steps[step] = beam_seq
+
+                # reshape `beam_seq` to its original size
+                beam_seq = beam_seq.reshape(batch_size * beam_size, step+1)  # (batch_size*beam_size, hyp_len)
+
+            else:
+                # calc threshold (Since this is the final step, there is no need for `alive_*` anymore.)
+                thresholds[:, step] = beam_score[:,(n_best-1):(n_best+1)].mean(dim=-1)
+
+            are_all_beam_finished = are_all_beam_finished_new
+
+        return thresholds, beam_seq_of_all_steps
 
     def ned_a2c(self, max_output_length, src: Tensor, trg: Tensor, src_mask: Tensor,
                         src_length: Tensor, temperature: float, critic: nn.Module, topk: int, log_probabilities=False, pickle_logs=False):
