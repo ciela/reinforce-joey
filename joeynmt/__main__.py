@@ -29,7 +29,7 @@ def main():
     args = ap.parse_args()
 
     if args.mode == "train":
-        train(cfg_file=args.config_path)
+        train(cfg_file=args.config_path, alpha=args.alpha)
     elif args.mode == "test":
         test(cfg_file=args.config_path, ckpt=args.ckpt, alpha=args.alpha,
              output_path=args.output_path, save_attention=args.save_attention)
