@@ -824,7 +824,7 @@ def vanilla_beam_search(model: Model, beam_size: int,
 
         # reconstruct beam origin and true word ids from flattened order
         beam_origin_index = beam_index.floor_divide(trg_vocab_size)  # (remaining_batch_size, beam_size)
-        word_index = beam_index.fmod(trg_vocab_size)  # (remaining_batch_size, beam_size)
+        vocab_index = beam_index.fmod(trg_vocab_size)  # (remaining_batch_size, beam_size)
 
         # map beam_index to batch_index in the flat representation
         batch_index = (
@@ -836,12 +836,12 @@ def vanilla_beam_search(model: Model, beam_size: int,
         # append the latest prediction
         beam_seq = torch.cat([
             beam_seq.index_select(0, select_ids),        # (remaining_batch_size * beam_size, step)
-            word_index.view(-1, 1)                          # (remaining_batch_size * beam_size, 1)
+            vocab_index.view(-1, 1)                          # (remaining_batch_size * beam_size, 1)
         ], -1).reshape(remaining_batch_size, -1, step+1)  # (remaining_batch_size, beam_size, step+1)
 
         # update `is_finished`; (remaining_batch_size, beam_size)
         is_finished = is_finished.view(-1).index_select(0, select_ids).reshape(remaining_batch_size, beam_size)
-        is_finished = word_index.eq(eos_index) | is_finished | beam_score.eq(-np.inf)
+        is_finished = vocab_index.eq(eos_index) | is_finished | beam_score.eq(-np.inf)
         if step + 1 == max_output_length:
             is_finished.fill_(True)
 
@@ -1084,10 +1084,10 @@ def compute_threshold_by_vanilla_beam_search(model: Model, beam_size: int,
 
         # reconstruct beam origin and true word ids from flattened order
         beam_origin_index = aug_beam_index.floor_divide(trg_vocab_size)  # (batch_size, beam_size+1)
-        word_index = aug_beam_index.fmod(trg_vocab_size)  # (batch_size, beam_size+1)
+        vocab_index = aug_beam_index.fmod(trg_vocab_size)  # (batch_size, beam_size+1)
 
         # compute `arg_beam_finished`; (batch_size, beam_size+1)
-        aug_beam_finished = word_index.eq(eos_index) | aug_beam_score.eq(-np.inf)
+        aug_beam_finished = vocab_index.eq(eos_index) | aug_beam_score.eq(-np.inf)
 
         # map beam_index to selected_index in the flat representation
         select_index = (
@@ -1099,7 +1099,7 @@ def compute_threshold_by_vanilla_beam_search(model: Model, beam_size: int,
         # append the latest prediction
         aug_beam_seq = torch.cat([
             beam_seq.index_select(0, select_index),  # (batch_size * (beam_size+1), step)
-            word_index.view(-1, 1)                   # (batch_size * (beam_size+1), 1)
+            vocab_index.view(-1, 1)                   # (batch_size * (beam_size+1), 1)
         ], -1).reshape(batch_size, beam_size+1, step + 1)    # (batch_size, beam_size+1, step+1)
 
         # separate results into 'beam_*' and 'runnerup_*'
@@ -1134,24 +1134,24 @@ def compute_threshold_by_vanilla_beam_search(model: Model, beam_size: int,
                             seq = runnerup_seq[batch_index]
                         else:
                             sorted_index = beam_vocab_score[batch_index].argsort(descending=True)  # (beam_size*trg_vocab_size)
-                            word_index = sorted_index.fmod(trg_vocab_size)
-                            unfinished = ~ word_index.eq(eos_index)
+                            vocab_index = sorted_index.fmod(trg_vocab_size)
+                            unfinished = ~ vocab_index.eq(eos_index)
                             first_unfinished_index = (unfinished * torch.arange(unfinished.shape[0],0,-1)).argmax()
                             beam_origin_index = sorted_index[first_unfinished_index].floor_divide(trg_vocab_size)
                             seq = torch.cat([
                                 beam_seq_old[beam_origin_index],
-                                word_index[first_unfinished_index].unsqueeze(-1)
+                                vocab_index[first_unfinished_index].unsqueeze(-1)
                             ])  # (step+1)
                         alive_seq = torch.vstack([alive_seq, seq])
 
                 else:
                     # prep
-                    score, word_index = alive_vocab_score[alive_index_old].sort(descending=True)  # (trg_vocab_size)
-                    unfinished = ~ word_index.eq(eos_index)
+                    score, vocab_index = alive_vocab_score[alive_index_old].sort(descending=True)  # (trg_vocab_size)
+                    unfinished = ~ vocab_index.eq(eos_index)
                     first_unfinished_index = (unfinished * torch.arange(unfinished.shape[0], 0, -1)).argmax()
                     seq = torch.cat([
                         alive_seq_old[alive_index_old],
-                        word_index[first_unfinished_index].unsqueeze(-1)
+                        vocab_index[first_unfinished_index].unsqueeze(-1)
                     ])  # (step+1)
                     # comp threshold and alive_seq
                     th_up = beam_score[batch_index,-1]
