@@ -724,8 +724,8 @@ def vanilla_beam_search(model: Model, beam_size: int,
         device=device)
 
     # keeps track of the top beam size hypotheses to expand for each element
-    # in the batch to be further decoded (that are still "alive")
-    alive_seq = torch.full(
+    # in the batch to be further decoded
+    beam_seq = torch.full(
         [batch_size * beam_size, 1],
         bos_index,
         dtype=torch.long,
@@ -755,17 +755,17 @@ def vanilla_beam_search(model: Model, beam_size: int,
                              dtype=torch.bool,
                              device=device)
 
-    for step in range(max_output_length):
+    for step in range(1,max_output_length):
         # This decides which part of the predicted sentence we feed to the
         # decoder to make the next prediction.
         # For Transformer, we feed the complete predicted sentence so far.
         # For Recurrent models, only feed the previous target word prediction
-        decoder_input = alive_seq  # complete prediction so far; (remaining_batch_size * beam_size, step+1)
+        decoder_input = beam_seq  # complete prediction so far; (remaining_batch_size * beam_size, step)
 
         # expand current hypotheses
         # decode one single step
         with torch.no_grad():
-            # logits: scores before final softmax; (remaining_batch_size * beam_size, step+1, trg_vocab_size)
+            # logits: scores before final softmax; (remaining_batch_size * beam_size, step, trg_vocab_size)
             logits, _, _, _ = model(
                 return_type="decode",
                 encoder_output=encoder_output,
@@ -787,9 +787,9 @@ def vanilla_beam_search(model: Model, beam_size: int,
 
         # compute length penalty
         if alpha > 0:
-            if step == 0:
+            if step == 1:
                 length_penalty_prev = 1.0
-            length_penalty = ((5.0 + (step + 1)) / 6.0) ** alpha
+            length_penalty = ((5.0 + step) / 6.0) ** alpha
             score_adjust_coeff = length_penalty_prev / length_penalty
         else:
             length_penalty = 1.0
@@ -810,38 +810,38 @@ def vanilla_beam_search(model: Model, beam_size: int,
             score_adjust_coeff[finished_ids] = 1.0
 
         # calc corr_scores
-        # 'topk_scores': (remaining_batch_size, beam_size) -> (remaining_batch_size*beam_size, 1)
-        topk_scores = topk_scores.reshape(-1, 1)
-        # 'curr_scores': (batch_size*beam_size, trg_vocab_size)
-        curr_scores = score_adjust_coeff * topk_scores + 1/length_penalty * log_probs
+        # 'beam_score': (remaining_batch_size, beam_size) -> (remaining_batch_size*beam_size, 1)
+        beam_score = beam_score.reshape(-1, 1)
+        # 'beam_vocab_score': (batch_size*beam_size, trg_vocab_size)
+        beam_vocab_score = score_adjust_coeff * beam_score + 1/length_penalty * log_probs
 
         # flatten log_probs into a list of possibilities
-        curr_scores = curr_scores.reshape(-1, beam_size * trg_vocab_size)  # (remaining_batch_size, beam_size*trg_vocab_size)
+        beam_vocab_score = beam_vocab_score.reshape(-1, beam_size * trg_vocab_size)  # (remaining_batch_size, beam_size*trg_vocab_size)
 
         # pick currently best top k hypotheses (flattened order)
-        # `topk_scores` and `topk_ids` shape: (remaining_batch_size, beam_size)
-        topk_scores, topk_ids = curr_scores.topk(beam_size, dim=-1)
+        # `beam_score` and `beam_index` shape: (remaining_batch_size, beam_size)
+        beam_score, beam_index = beam_vocab_score.topk(beam_size, dim=-1)
 
         # reconstruct beam origin and true word ids from flattened order
-        topk_beam_origin_ids = topk_ids.floor_divide(trg_vocab_size)  # (remaining_batch_size, beam_size)
-        topk_ids = topk_ids.fmod(trg_vocab_size)  # (remaining_batch_size, beam_size)
+        beam_origin_index = beam_index.floor_divide(trg_vocab_size)  # (remaining_batch_size, beam_size)
+        word_index = beam_index.fmod(trg_vocab_size)  # (remaining_batch_size, beam_size)
 
         # map beam_index to batch_index in the flat representation
         batch_index = (
-            topk_beam_origin_ids                                # (remaining_batch_size, beam_size)
+            beam_origin_index                                # (remaining_batch_size, beam_size)
             + beam_offset[:remaining_batch_size].unsqueeze(1)   # (remaining_batch_size, 1)
         )  # (remaining_batch_size, beam_size)
         select_ids = batch_index.view(-1)  # (remaining_batch_size * beam_size)
 
         # append the latest prediction
-        topk_seqs = torch.cat([
-            alive_seq.index_select(0, select_ids),        # (remaining_batch_size * beam_size, step+1)
-            topk_ids.view(-1, 1)                          # (remaining_batch_size * beam_size, 1)
-        ], -1).reshape(remaining_batch_size, -1, step+2)  # (remaining_batch_size, beam_size, step+2)
+        beam_seq = torch.cat([
+            beam_seq.index_select(0, select_ids),        # (remaining_batch_size * beam_size, step)
+            word_index.view(-1, 1)                          # (remaining_batch_size * beam_size, 1)
+        ], -1).reshape(remaining_batch_size, -1, step+1)  # (remaining_batch_size, beam_size, step+1)
 
         # update `is_finished`; (remaining_batch_size, beam_size)
         is_finished = is_finished.view(-1).index_select(0, select_ids).reshape(remaining_batch_size, beam_size)
-        is_finished = topk_ids.eq(eos_index) | is_finished | topk_scores.eq(-np.inf)
+        is_finished = word_index.eq(eos_index) | is_finished | beam_score.eq(-np.inf)
         if step + 1 == max_output_length:
             is_finished.fill_(True)
 
@@ -854,7 +854,7 @@ def vanilla_beam_search(model: Model, beam_size: int,
             # (we don't need 'hypotheses' and can directory save score and seq to `best_hyp`.)
             for b in [x.item() for x in end_condition.nonzero()]:
                 b_org = batch_offset[b]
-                for score, seq in zip(topk_scores[b], topk_seqs[b]):
+                for score, seq in zip(beam_score[b], beam_seq[b]):
                     if seq.eq(eos_index).count_nonzero().item() >= 2:
                         seq = seq[:seq.eq(eos_index).nonzero()[0].item()+1]
                     hypotheses[b_org].append(
@@ -877,16 +877,16 @@ def vanilla_beam_search(model: Model, beam_size: int,
 
         # remove finished examples for the next step
         batch_index = batch_index.index_select(0, unfinished)  # (remaining_batch_size, beam_size)
-        topk_scores = topk_scores.index_select(0, unfinished)  # (remaining_batch_size, beam_size)
+        beam_score = beam_score.index_select(0, unfinished)  # (remaining_batch_size, beam_size)
         batch_offset = batch_offset.index_select(0, unfinished)  # (remaining_batch_size)
-        alive_seq = topk_seqs.index_select(0, unfinished)  # (remaining_batch_size, beam_size, hyp_len)
+        beam_seq = beam_seq.index_select(0, unfinished)  # (remaining_batch_size, beam_size, hyp_len)
         is_finished = is_finished.index_select(0, unfinished)  # (remaining_batch_size, beam_size)
 
         # update remaining_batch_size
         remaining_batch_size = len(batch_offset)
 
-        # reshape `alive_seq` to its original size
-        alive_seq = alive_seq.reshape(remaining_batch_size * beam_size, step + 2)  # (remaining_batch_size*beam_size, hyp_len)
+        # reshape `beam_seq` to its original size
+        beam_seq = beam_seq.reshape(remaining_batch_size * beam_size, step + 1)  # (remaining_batch_size*beam_size, hyp_len)
 
         # reorder indices, outputs and masks
         select_indices = batch_index.view(-1)
