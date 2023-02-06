@@ -487,19 +487,18 @@ class Model(nn.Module):
 
             # expand current hypotheses
             # decode one single step
-            with torch.no_grad():
-                # logits: scores before final softmax; (batch_size * beam_size + finished_batch_size, step, trg_vocab_size)
-                logits, _, _, _ = self(
-                    return_type="decode",
-                    encoder_output=encoder_output,
-                    encoder_hidden=None,  # only for initializing decoder_hidden
-                    src_mask=src_mask,
-                    trg_input=decoder_input,  # trg_embed = embed(decoder_input)
-                    decoder_hidden=None,  # don't need to keep it for transformer
-                    att_vector=None,  # don't need to keep it for transformer
-                    unroll_steps=1,
-                    trg_mask=trg_mask  # subsequent mask for Transformer only
-                )
+            # logits: scores before final softmax; (batch_size * beam_size + finished_batch_size, step, trg_vocab_size)
+            logits, _, _, _ = self(
+                return_type="decode",
+                encoder_output=encoder_output,
+                encoder_hidden=None,  # only for initializing decoder_hidden
+                src_mask=src_mask,
+                trg_input=decoder_input,  # trg_embed = embed(decoder_input)
+                decoder_hidden=None,  # don't need to keep it for transformer
+                att_vector=None,  # don't need to keep it for transformer
+                unroll_steps=1,
+                trg_mask=trg_mask  # subsequent mask for Transformer only
+            )
 
             # For the Transformer we made predictions for all time steps up to
             # this point, so we only want to know about the last time step.
