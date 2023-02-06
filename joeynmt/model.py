@@ -529,10 +529,6 @@ class Model(nn.Module):
                 # `beam_finished` shape : (batch_size, beam_size)
                 finished_ids = beam_finished.reshape(-1).nonzero().reshape(-1)
 
-                # correct `log_probs` so that the finished sequence never gets a vocab other than EOS
-                log_probs[finished_ids] = float('-inf')
-                log_probs[finished_ids, eos_index] = 0.0
-
                 # correct `score_adjust_coeff` so that the scores of the finished sequences do not change
                 # `score_adjust_coeff` shape: (1) -> (batch_size * beam_size + finished_batch_size)
                 score_adjust_coeff *= torch.ones((batch_size*beam_size+finished_batch_size,1), device=device)
