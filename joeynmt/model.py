@@ -621,10 +621,11 @@ class Model(nn.Module):
                         ])  # (step+1)
                         # comp threshold and alive_seq
                         th_up = beam_score[batch_index,-1]
-                        try:
-                            th_dn = score[score<th_up].max()
-                        except RuntimeError:  # for the case that all scores are over the th_up
+                        if (score > th_up).all():
+                            # for the case that all scores are over the th_up
                             th_dn = th_up - 0.1
+                        else:
+                            th_dn = score[score < th_up].max()
                         thresholds[batch_index, step] = (th_up + th_dn) /2
                         alive_seq = torch.vstack([alive_seq, seq])
                         alive_index_old += 1
