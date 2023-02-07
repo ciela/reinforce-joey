@@ -315,7 +315,7 @@ class Model(nn.Module):
 
         # run beam search and get thresholds
         with torch.no_grad():
-            threasholds, _ = self._compute_threshold_by_vanilla_beam_search(
+            thresholds, _ = self._compute_threshold_by_vanilla_beam_search(
                 5, encoder_output, encoder_hidden, src_mask, max_output_length, alpha
             )
 
@@ -344,7 +344,7 @@ class Model(nn.Module):
             finished = initial_finished()
 
             # adopion start
-            score = adoption_model(log_probs_norm, threasholds[l])  # (batch_size, token_size)
+            score = adoption_model(log_probs_norm, thresholds[:, l].unsqueeze(1))  # (batch_size, token_size)
             to_adopt = score >= uniform_dist.sample(score.size()).squeeze(-1)  # (batch_size, token_size)
             # filter adopted indexes and tokens
             filtered_indexes = to_adopt.nonzero()
@@ -361,6 +361,7 @@ class Model(nn.Module):
             # add adoption scores to increased previous scores
             ys_scores = prev_ys_scores + next_ys_scores
             # update other adopted tensors for next decoder I/O
+            thresholds = thresholds.index_select(0, adopted_indexes)
             encoder_output = encoder_output.index_select(0, adopted_indexes)
             src_mask = src_mask.index_select(0, adopted_indexes)
             log_probs = log_probs.index_select(0, adopted_indexes)
