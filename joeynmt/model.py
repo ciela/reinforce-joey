@@ -633,12 +633,13 @@ class Model(nn.Module):
                 # backup beam_seq
                 beam_seq_of_all_steps[step] = beam_seq
 
-                # reshape `beam_seq` to its original size
-                beam_seq = beam_seq.reshape(batch_size * beam_size, step+1)  # (batch_size*beam_size, hyp_len)
-
             else:
                 # calc threshold (Since this is the final step, there is no need for `alive_*` anymore.)
                 thresholds[:, step] = beam_score[:,(n_best-1):(n_best+1)].mean(dim=-1)
+                alive_seq = alive_seq.reshape(-1, step + 1)
+
+            # reshape `beam_seq` to its original size
+            beam_seq = beam_seq.reshape(batch_size * beam_size, step+1)  # (batch_size*beam_size, hyp_len)
 
             are_all_beam_finished = are_all_beam_finished_new
 
