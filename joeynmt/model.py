@@ -582,7 +582,7 @@ class Model(nn.Module):
             are_all_beam_finished_new = beam_finished.all(dim=-1)  # (batch_size)
 
             # calc thresholds
-            if step < max_output_length-1 and n_best < beam_size:
+            if step < max_output_length-1 and n_best == beam_size:
                 alive_index_old = 0
                 alive_seq_old = alive_seq
                 alive_seq = torch.full([0,step+1], bos_index, dtype=torch.long, device=device)
