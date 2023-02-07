@@ -612,7 +612,7 @@ class Model(nn.Module):
                         # prep
                         score, word_index = alive_vocab_score[alive_index_old].sort(descending=True)  # (trg_vocab_size)
                         unfinished = ~ word_index.eq(eos_index)
-                        first_unfinished_index = (unfinished * torch.arange(unfinished.shape[0], 0, -1)).argmax()
+                        first_unfinished_index = (unfinished * torch.arange(unfinished.shape[0], 0, -1, device=device)).argmax()
                         seq = torch.cat([
                             alive_seq_old[alive_index_old],
                             word_index[first_unfinished_index].unsqueeze(-1)
