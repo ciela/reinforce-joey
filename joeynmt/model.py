@@ -413,7 +413,7 @@ class Model(nn.Module):
 
         # init
         bos_index = self.bos_index
-        eos_index = 4#model.eos_index
+        eos_index = self.eos_index
         pad_index = self.pad_index
         trg_vocab_size = self.decoder.output_size
         device = encoder_output.device
