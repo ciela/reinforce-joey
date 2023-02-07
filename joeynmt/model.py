@@ -577,9 +577,6 @@ class Model(nn.Module):
             runnerup_finished = aug_beam_finished[:, -1]  # (batch_size)
             runnerup_seq = aug_beam_seq[:, -1, :]         # (batch_size, step+1)
 
-            # if step + 1 == max_output_length:
-            #     beam_finished.fill_(True)
-
             # compute the flag whether the all beam is finished
             are_all_beam_finished_new = beam_finished.all(dim=-1)  # (batch_size)
 
