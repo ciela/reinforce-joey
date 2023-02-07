@@ -349,7 +349,10 @@ class Model(nn.Module):
             # filter adopted indexes and tokens
             filtered_indexes = to_adopt.nonzero()
             adopted_indexes = filtered_indexes[:, 0]
-            if not (0 < adopted_indexes.size(0) <= batch_size * 5):  # TODO how to fix max adoption set size
+            if adopted_indexes.size(0) == 0:
+                return
+            if adopted_indexes.size(0) > batch_size * 5:
+                # TODO how to fix max adoption set size
                 # TODO: how to handle out of range size
                 continue
             prev_ys_tokens = ys_tokens.index_select(0, adopted_indexes)
