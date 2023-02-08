@@ -1111,14 +1111,17 @@ def compute_threshold_by_vanilla_beam_search(model: Model, beam_size: int,
         runnerup_finished = aug_beam_finished[:, -1]  # (batch_size)
         runnerup_seq = aug_beam_seq[:, -1, :]         # (batch_size, step+1)
 
-        # if step + 1 == max_output_length:
-        #     beam_finished.fill_(True)
+        # backup beam_seq
+        beam_seq_of_all_steps[step] = beam_seq
+
+        # reshape `beam_seq` to its original size
+        beam_seq = beam_seq.reshape(batch_size * beam_size, step + 1)  # (batch_size*beam_size, hyp_len)
 
         # compute the flag whether the all beam is finished
         are_all_beam_finished_new = beam_finished.all(dim=-1)  # (batch_size)
 
         # calc thresholds
-        if step < max_output_length-1 and n_best < beam_size:
+        if step < max_output_length-1 and n_best == beam_size:
             alive_index_old = 0
             alive_seq_old = alive_seq
             alive_seq = torch.full([0,step+1], bos_index, dtype=torch.long, device=device)
@@ -1154,20 +1157,15 @@ def compute_threshold_by_vanilla_beam_search(model: Model, beam_size: int,
                         vocab_index[first_unfinished_index].unsqueeze(-1)
                     ])  # (step+1)
                     # comp threshold and alive_seq
-                    th_up = beam_score[batch_index,-1]
-                    try:
-                        th_dn = score[score<th_up].max()
-                    except RuntimeError:  # for the case that all scores are over the th_up
+                    th_up = beam_score[batch_index, -1]
+                    if (score > th_up).all():
+                        # for the case that all scores are over the th_up
                         th_dn = th_up - 0.1
+                    else:
+                        th_dn = score[score < th_up].max()
                     thresholds[batch_index, step] = (th_up + th_dn) /2
                     alive_seq = torch.vstack([alive_seq, seq])
                     alive_index_old += 1
-
-            # backup beam_seq
-            beam_seq_of_all_steps[step] = beam_seq
-
-            # reshape `beam_seq` to its original size
-            beam_seq = beam_seq.reshape(batch_size * beam_size, step+1)  # (batch_size*beam_size, hyp_len)
 
         else:
             # calc threshold (Since this is the final step, there is no need for `alive_*` anymore.)
