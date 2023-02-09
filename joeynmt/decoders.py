@@ -903,6 +903,8 @@ class TransformerDecoder(Decoder):
         :param hidden: unused
         :param trg_mask: to mask out target paddings
                          Note that a subsequent mask is applied here.
+        :param finished: indexes of finished sequences
+        :param eos_index: used if finished is not None and finished.size(0)>0
         :param kwargs:
         :return:
         """
