@@ -547,7 +547,7 @@ class Model(nn.Module):
             # pick currently best top k hypotheses as beam set (flattened order)
             # `aug_beam_score` and `aug_beam_ids` shape: (batch_size, beam_size+1)
             # 'aug' is the abbreviation for 'augmented'.
-            aug_beam_score, aug_beam_index = beam_vocab_score.topk(beam_size+1, dim=-1, sorted=True)
+            aug_beam_score, aug_beam_index = beam_vocab_score.topk(beam_size+1, dim=-1, sorted=True, largest=True)
 
             # reconstruct beam origin and true word ids from flattened order
             beam_origin_index = aug_beam_index.floor_divide(trg_vocab_size)  # (batch_size, beam_size+1)
