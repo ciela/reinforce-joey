@@ -623,7 +623,9 @@ class Model(nn.Module):
                 unroll_steps=kwargs["unroll_steps"],
                 decoder_hidden=kwargs["decoder_hidden"],
                 att_vector=kwargs.get("att_vector", None),
-                trg_mask=kwargs.get("trg_mask", None))
+                trg_mask=kwargs.get("trg_mask", None),
+                finished=kwargs.get("finished", None),
+                eos_index=kwargs.get("eos_index", -1))
 
             # return decoder outputs
             return_tuple = (outputs, hidden, att_probs, att_vectors)
@@ -669,7 +671,8 @@ class Model(nn.Module):
     def _decode(self, encoder_output: Tensor, encoder_hidden: Tensor,
                 src_mask: Tensor, trg_input: Tensor,
                 unroll_steps: int, decoder_hidden: Tensor = None,
-                att_vector: Tensor = None, trg_mask: Tensor = None) \
+                att_vector: Tensor = None, trg_mask: Tensor = None,
+                finished: Tensor = None, eos_index: int = -1) \
             -> (Tensor, Tensor, Tensor, Tensor):
         """
         Decode, given an encoded source sentence.
@@ -682,6 +685,8 @@ class Model(nn.Module):
         :param decoder_hidden: decoder hidden state (optional)
         :param att_vector: previous attention vector (optional)
         :param trg_mask: mask for target steps
+        :param finished: indexes of finished sequences (optional used only if decoder is TransformerDecoder)
+        :param eos_index: index of eos-token (optional used only if decoder is TransformerDecoder and finished is not None)
         :return: decoder outputs (outputs, hidden, att_probs, att_vectors)
         """
         return self.decoder(trg_embed=self.trg_embed(trg_input),
@@ -691,7 +696,9 @@ class Model(nn.Module):
                             unroll_steps=unroll_steps,
                             hidden=decoder_hidden,
                             prev_att_vector=att_vector,
-                            trg_mask=trg_mask)
+                            trg_mask=trg_mask,
+                            finished=finished,
+                            eos_index=eos_index)
 
     def __repr__(self) -> str:
         """

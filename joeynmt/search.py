@@ -1027,7 +1027,9 @@ def compute_threshold_by_vanilla_beam_search(model: Model, beam_size: int,
                 decoder_hidden=None,  # don't need to keep it for transformer
                 att_vector=None,  # don't need to keep it for transformer
                 unroll_steps=1,
-                trg_mask=trg_mask  # subsequent mask for Transformer only
+                trg_mask=trg_mask,  # subsequent mask for Transformer only
+                finished=beam_finished.reshape(batch_size*beam_size).nonzero().squeeze(),
+                eos_index=eos_index
             )
 
         # For the Transformer we made predictions for all time steps up to
@@ -1060,8 +1062,8 @@ def compute_threshold_by_vanilla_beam_search(model: Model, beam_size: int,
             finished_ids = beam_finished.reshape(-1).nonzero().reshape(-1)
 
             # correct `log_probs` so that the finished sequence never gets a vocab other than EOS
-            log_probs[finished_ids] = float('-inf')
-            log_probs[finished_ids, eos_index] = 0.0
+            # log_probs[finished_ids] = float('-inf')   # This is no longer needed since the decoder has taken care of it. will be removed soon.
+            # log_probs[finished_ids, eos_index] = 0.0  # This is no longer needed since the decoder has taken care of it. will be removed soon.
 
             # correct `score_adjust_coeff` so that the scores of the finished sequences do not change
             # `score_adjust_coeff` shape: (1) -> (batch_size * beam_size + finished_batch_size)
@@ -1080,7 +1082,7 @@ def compute_threshold_by_vanilla_beam_search(model: Model, beam_size: int,
         # pick currently best top k hypotheses as beam set (flattened order)
         # `aug_beam_score` and `aug_beam_ids` shape: (batch_size, beam_size+1)
         # 'aug' is the abbreviation for 'augmented'.
-        aug_beam_score, aug_beam_index = beam_vocab_score.topk(beam_size+1, dim=-1, sorted=True)
+        aug_beam_score, aug_beam_index = beam_vocab_score.topk(beam_size+1, dim=-1, largest=True, sorted=True)
 
         # reconstruct beam origin and true word ids from flattened order
         beam_origin_index = aug_beam_index.floor_divide(trg_vocab_size)  # (batch_size, beam_size+1)
