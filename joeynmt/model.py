@@ -497,7 +497,7 @@ class Model(nn.Module):
                 encoder_output=encoder_output,
                 src_mask=src_mask,
                 trg_mask=trg_mask,  # subsequent mask for Transformer only
-                finished=are_all_beam_finished.nonzero().squeeze(1),
+                finished=beam_finished.reshape(batch_size * beam_size).nonzero().squeeze(1),
                 eos_index=self.eos_index,
             )
 
