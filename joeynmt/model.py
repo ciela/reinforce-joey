@@ -492,15 +492,13 @@ class Model(nn.Module):
             # expand current hypotheses
             # decode one single step
             # logits: scores before final softmax; (batch_size * beam_size + finished_batch_size, step, trg_vocab_size)
-            logits, _, _, _ = self._decode(
-                trg_input=decoder_input,  # trg_embed = embed(decoder_input)
+            logits, _, _, _ = self.decoder(
+                trg_embed=self.trg_embed(decoder_input),  # trg_embed = embed(decoder_input)
                 encoder_output=encoder_output,
-                encoder_hidden=None,  # only for initializing decoder_hidden
                 src_mask=src_mask,
-                unroll_steps=1,
-                decoder_hidden=None,  # don't need to keep it for transformer
-                att_vector=None,  # don't need to keep it for transformer
-                trg_mask=trg_mask  # subsequent mask for Transformer only
+                trg_mask=trg_mask,  # subsequent mask for Transformer only
+                finished=are_all_beam_finished.nonzero().squeeze(1),
+                eos_index=self.eos_index,
             )
 
             # For the Transformer we made predictions for all time steps up to
