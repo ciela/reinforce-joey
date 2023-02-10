@@ -84,6 +84,7 @@ class TrainManager:
         self.log_probabilities = train_config["reinforcement_learning"].get("log_probabilities", False)
         self.pickle_logs = train_config["reinforcement_learning"].get("pickle_logs", False)
         self.topk = train_config["reinforcement_learning"].get("topk", 20)
+        self.max_adoption_size = train_config["reinforcement_learning"]["hyperparameters"].get("max_adoption_size", 100)
 
         if self.log_probabilities:
             self.entropy_logger = make_retro_logger("{}/entropy.log".format(self.model_dir), "entropy_logger")
@@ -398,10 +399,11 @@ class TrainManager:
             "\t16-bits training: %r\n"
             "\tgradient accumulation: %d\n"
             "\tbatch size per device: %d\n"
-            "\ttotal batch size (w. parallel & accumulation): %d",
+            "\ttotal batch size (w. parallel & accumulation): %d\n"
+            "\tmaximum adoption set size: %d",
             self.device, self.n_gpu, self.fp16, self.batch_multiplier,
             self.batch_size//self.n_gpu if self.n_gpu > 1 else self.batch_size,
-            self.batch_size * self.batch_multiplier)
+            self.batch_size * self.batch_multiplier, self.max_adoption_size)
 
         for epoch_no in range(self.epochs):
             logger.info("EPOCH %d", epoch_no + 1)
@@ -531,7 +533,8 @@ class TrainManager:
             add_gold=self.add_gold,
             topk=self.topk,
             log_probabilities=self.log_probabilities,
-            pickle_logs=self.pickle_logs)
+            pickle_logs=self.pickle_logs,
+            max_adoption_size=self.max_adoption_size)
 
             if self.method == "a2c":
                 losses = batch_loss

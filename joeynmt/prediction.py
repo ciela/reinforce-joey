@@ -101,6 +101,7 @@ def validate_on_data(model: Model, data: Dataset,
     log_probabilities = config["training"]["reinforcement_learning"].get("log_probabilities", False)
     pickle_logs = config["training"]["reinforcement_learning"].get("pickle_logs", False)
     topk = config["training"]["reinforcement_learning"].get("topk", 20)
+    max_adoption_size = config["training"]["reinforcement_learning"].get("max_adoption_size", 100)
 
     model.eval()
     # don't track gradients during validation
@@ -135,7 +136,8 @@ def validate_on_data(model: Model, data: Dataset,
                         add_gold=add_gold,
                         critic=critic,
                         log_probabilities=log_probabilities,
-                        pickle_logs=pickle_logs)
+                        pickle_logs=pickle_logs,
+                        max_adoption_size=max_adoption_size)
 
                     if method == "a2c":
                         losses = batch_loss

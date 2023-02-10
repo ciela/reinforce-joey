@@ -258,7 +258,7 @@ class Model(nn.Module):
 
     def soft_beam_search(self, max_output_length, src: Tensor, trg: Tensor, src_mask: Tensor,
             src_length: Tensor, temperature: float, topk: int, log_probabilities: False, pickle_logs:False,
-            alpha: float = 1., gumbel_scale: float = 1.):
+            alpha: float = 1., gumbel_scale: float = 1., max_adoption_size: int = 100):
         """ Computes forward pass for Soft Beam Search
 
         Encodes source, then step by step decodes and samples token from output distribution.
@@ -274,6 +274,7 @@ class Model(nn.Module):
         :param log_probabilities: log probabilities
         :param alpha: length normalization controller
         :param gumbel_scale: scale parameter of gumbel distribution
+        :param max_adoption_size: maximum size of adoption set size
         :return: loss, logs
         """
         dev = src.device
@@ -351,11 +352,9 @@ class Model(nn.Module):
             adopted_indexes = filtered_indexes[:, 0]
             if adopted_indexes.size(0) == 0:
                 break
-            if adopted_indexes.size(0) > batch_size * 100:
-                # TODO how to fix max adoption set size
-                # TODO: how to handle out of range size
-                log.warning(f'Adopted token set size exceeds {batch_size=} * {100}')
-                continue
+            if adopted_indexes.size(0) > batch_size * max_adoption_size:
+                log.warning(f'Adopted token set size {adopted_indexes.size(0)} exceeds {batch_size=} * {max_adoption_size=}')
+                adopted_indexes = adopted_indexes  # TODO re-sample
             prev_ys_tokens = ys_tokens.index_select(0, adopted_indexes)
             next_ys_tokens = filtered_indexes[:, 1].unsqueeze(1)
             prev_ys_scores = ys_scores.index_select(0, adopted_indexes)
@@ -843,7 +842,8 @@ class Model(nn.Module):
             temperature=kwargs["temperature"],
             topk=kwargs['topk'],
             log_probabilities=kwargs["log_probabilities"],
-            pickle_logs=kwargs["pickle_logs"]
+            pickle_logs=kwargs["pickle_logs"],
+            max_adoption_size=kwargs["max_adoption_size"],
             )
             return_tuple = (loss, logging, None, None)
 
