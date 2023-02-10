@@ -51,13 +51,14 @@ training:
   reinforcement_learning:
     use_reinforcement_learning: True
     method: "sbs"
-    log_probabilities: True
+    log_probabilities: False
     topk: 100
     hyperparameters:
       temperature: 1
       alpha: 1
       reward: "bleu"
       samples: 5
+      max_adoption_size: 100
       baseline: "average_reward_baseline"
 
 model:
