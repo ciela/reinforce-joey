@@ -101,6 +101,7 @@ def validate_on_data(model: Model, data: Dataset,
     log_probabilities = config["training"]["reinforcement_learning"].get("log_probabilities", False)
     pickle_logs = config["training"]["reinforcement_learning"].get("pickle_logs", False)
     topk = config["training"]["reinforcement_learning"].get("topk", 20)
+    max_adoption_size = config["training"]["reinforcement_learning"].get("max_adoption_size", 100)
 
     model.eval()
     # don't track gradients during validation
@@ -135,7 +136,8 @@ def validate_on_data(model: Model, data: Dataset,
                         add_gold=add_gold,
                         critic=critic,
                         log_probabilities=log_probabilities,
-                        pickle_logs=pickle_logs)
+                        pickle_logs=pickle_logs,
+                        max_adoption_size=max_adoption_size)
 
                     if method == "a2c":
                         losses = batch_loss
@@ -297,6 +299,7 @@ def parse_test_args(cfg, mode="test"):
 # pylint: disable-msg=logging-too-many-args
 def test(cfg_file,
          ckpt: str,
+         alpha: float,
          output_path: str = None,
          save_attention: bool = False,
          datasets: dict = None) -> None:
@@ -338,7 +341,7 @@ def test(cfg_file,
 
     # parse test args
     batch_size, batch_type, use_cuda, n_gpu, level, eval_metric, \
-        max_output_length, beam_size, beam_alpha, postprocess, \
+        max_output_length, beam_size, _, postprocess, \
         bpe_type, sacrebleu, decoding_description, tokenizer_info \
         = parse_test_args(cfg, mode="test")
 
@@ -364,18 +367,19 @@ def test(cfg_file,
         logger.info("Decoding on %s set (%s)...", data_set_name, dataset_file)
 
         #pylint: disable=unused-variable
+        logger.info(f'Length penalty alpha = {alpha}')
         score, loss, ppl, sources, sources_raw, references, hypotheses, \
         hypotheses_raw, attention_scores,valid_data = validate_on_data(
             model, data=data_set, batch_size=batch_size, config=cfg,
             batch_type=batch_type, level=level,
             max_output_length=max_output_length, eval_metric=eval_metric,
             use_cuda=use_cuda, compute_loss=False, beam_size=beam_size,
-            beam_alpha=beam_alpha, postprocess=postprocess,
+            beam_alpha=alpha, postprocess=postprocess,
             bpe_type=bpe_type, sacrebleu=sacrebleu, n_gpu=n_gpu)
         #pylint: enable=unused-variable
 
         if "trg" in data_set.fields:
-            logger.info("%4s %s%s: %6.2f [%s]",
+            logger.info("%4s %s%s: %6.9f [%s]",
                         data_set_name, eval_metric, tokenizer_info,
                         score, decoding_description)
         else:
@@ -407,7 +411,7 @@ def test(cfg_file,
             logger.info("Translations saved to: %s", output_path_set)
 
 
-def translate(cfg_file: str, ckpt: str, output_path: str = None) -> None:
+def translate(cfg_file: str, ckpt: str, alpha: float, output_path: str = None) -> None:
     """
     Interactive translation function.
     Loads model from checkpoint and translates either the stdin input or
@@ -450,7 +454,7 @@ def translate(cfg_file: str, ckpt: str, output_path: str = None) -> None:
             batch_type=batch_type, level=level,
             max_output_length=max_output_length, eval_metric="",
             use_cuda=use_cuda, compute_loss=False, beam_size=beam_size,
-            beam_alpha=beam_alpha, postprocess=postprocess,
+            beam_alpha=alpha, postprocess=postprocess,
             bpe_type=bpe_type, sacrebleu=sacrebleu, n_gpu=n_gpu)
         return hypotheses
 

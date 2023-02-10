@@ -12,7 +12,7 @@ from joeynmt.attention import BahdanauAttention, LuongAttention
 from joeynmt.encoders import Encoder
 from joeynmt.helpers import freeze_params, ConfigurationError, subsequent_mask
 from joeynmt.transformer_layers import PositionalEncoding, \
-    TransformerDecoderLayer 
+    TransformerDecoderLayer
 
 
 # pylint: disable=abstract-method
@@ -640,7 +640,7 @@ class CriticDecoder(Decoder):
             rnn_input = torch.cat([prev_embed, prev_att_vector], dim=2)
         else:
             rnn_input = prev_embed
-        
+
         rnn_input = self.emb_dropout(rnn_input)
 
         # rnn_input: batch x 1 x emb+2*enc_size
@@ -828,7 +828,7 @@ class CriticDecoder(Decoder):
 
     def __repr__(self):
         return "RecurrentDecoder(rnn=%r, attention=%r)" % (
-            self.rnn, self.attention)           
+            self.rnn, self.attention)
 
 
 # pylint: disable=arguments-differ,too-many-arguments
@@ -889,6 +889,8 @@ class TransformerDecoder(Decoder):
                 unroll_steps: int = None,
                 hidden: Tensor = None,
                 trg_mask: Tensor = None,
+                finished: Tensor = None,
+                eos_index: int = -1,
                 **kwargs):
         """
         Transformer decoder forward pass.
@@ -901,10 +903,34 @@ class TransformerDecoder(Decoder):
         :param hidden: unused
         :param trg_mask: to mask out target paddings
                          Note that a subsequent mask is applied here.
+        :param finished: indexes of finished sequences
+        :param eos_index: used if finished is not None and finished.size(0)>0
         :param kwargs:
         :return:
         """
         assert trg_mask is not None, "trg_mask required for Transformer"
+
+        # if there are alredy finished seqs, use unfinished seqs only
+        if not_using_finished := (finished is not None and (fin_size := finished.size(0)) > 0):
+            # if all finished, return fixed outputs
+            if fin_size == trg_embed.size(0):
+                output_finished = trg_embed.new_full(
+                    (fin_size, trg_embed.size(1), self._output_size),
+                    float('-inf'), dtype=torch.float,
+                )
+                output_finished[:, :, eos_index] = 0.
+                return output_finished, None, None, None
+            # filter unfinished trg_embed, encoder_output and src_mask
+            uniques, counts = torch.cat(
+                (torch.arange(trg_embed.size(0), device=trg_embed.device), finished),
+            ).unique(return_counts=True)
+            unfinished = uniques[counts == 1]
+            unfin_size = unfinished.size(0)
+            assert fin_size + unfin_size == trg_embed.size(0)
+            assert fin_size == trg_embed[counts > 1].size(0)
+            trg_embed = trg_embed[counts == 1]
+            encoder_output = encoder_output[counts == 1]
+            src_mask = src_mask[counts == 1]
 
         x = self.pe(trg_embed)  # add position encoding to word embedding
         x = self.emb_dropout(x)
@@ -918,6 +944,21 @@ class TransformerDecoder(Decoder):
 
         x = self.layer_norm(x)
         output = self.output_layer(x)
+
+        # finally, concatenate finished and unfinshed outputs
+        if not_using_finished:
+            output_finished = output.new_full(
+                (fin_size, output.size(1), output.size(2)),
+                float('-inf'), dtype=torch.float,
+            )
+            output_finished[:, :, eos_index] = 0.
+            # merge two outputs
+            output_merged = output.new_zeros(
+                (fin_size + unfin_size, output.size(1), output.size(2))
+            )
+            output = output_merged\
+                .index_add(0, unfinished, output)\
+                .index_add(0, finished, output_finished)
 
         return output, x, None, None
 

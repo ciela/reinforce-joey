@@ -1,10 +1,10 @@
-name: "pg-in-domain"
+name: "sbs-in-domain"
 
 data:
   src: "de"
   trg: "en"
   train: "test/data/iwslt14/train.bpe.32000"
-  # dev: "test/data/iwslt14/valid.bpe.32000"
+  dev: "test/data/iwslt14/valid.bpe.32000"
   test: "test/data/iwslt14/test.bpe.32000"
   level: "bpe"
   lowercase: True
@@ -40,7 +40,7 @@ training:
   logging_freq: 500
   track_peakiness_freq: 500
   eval_metric: "bleu"
-  model_dir: "models/pg_in_domain"
+  model_dir: "models/sbs_in_domain"
   overwrite: True
   shuffle: True
   use_cuda: True
@@ -50,14 +50,15 @@ training:
 
   reinforcement_learning:
     use_reinforcement_learning: True
-    method: "reinforce"
-    log_probabilities: True
+    method: "sbs"
+    log_probabilities: False
     topk: 100
     hyperparameters:
       temperature: 1
       alpha: 1
       reward: "bleu"
       samples: 5
+      max_adoption_size: 100
       baseline: "average_reward_baseline"
 
 model:

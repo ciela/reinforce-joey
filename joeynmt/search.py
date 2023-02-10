@@ -304,7 +304,7 @@ def beam_search(model: Model, size: int,
         curr_scores = log_probs.clone()
 
         # compute length penalty
-        if alpha > -1:
+        if alpha > 0:
             length_penalty = ((5.0 + (step + 1)) / 6.0) ** alpha
             curr_scores /= length_penalty
 
@@ -314,7 +314,7 @@ def beam_search(model: Model, size: int,
         # pick currently best top k hypotheses (flattened order)
         topk_scores, topk_ids = curr_scores.topk(size, dim=-1)
 
-        if alpha > -1:
+        if alpha > 0:
             # recover original log probs
             topk_log_probs = topk_scores * length_penalty
         else:
@@ -421,18 +421,19 @@ def beam_search(model: Model, size: int,
 
 
 # pylint: disable=too-many-statements,too-many-branches
-def fcfs_beam_search(model: Model, size: int,
+def fcfs_beam_search(model: Model, beam_size: int,
                 encoder_output: Tensor, encoder_hidden: Tensor,
                 src_mask: Tensor, max_output_length: int,
                 alpha: float, n_best: int = 1) -> (np.array, np.array):
     """
-    Beam search with size k.
-    Inspired by OpenNMT-py, adapted for Transformer.
+    FCFS Beam search with size k.
+    based on beam_search and [this paper](https://arxiv.org/abs/2204.05424),
+    adapted for Transformer.
 
     In each decoding step, find the k most likely partial hypotheses.
 
     :param model:
-    :param size: size of the beam
+    :param beam_size: size of the beam
     :param encoder_output:
     :param encoder_hidden:
     :param src_mask:
@@ -443,8 +444,8 @@ def fcfs_beam_search(model: Model, size: int,
         - stacked_output: output hypotheses (2d array of indices),
         - stacked_attention_scores: attention scores (3d array)
     """
-    assert size > 0, 'Beam size must be >0.'
-    assert n_best <= size, 'Can only return {} best hypotheses.'.format(size)
+    assert beam_size > 0, 'Beam size must be >0.'
+    assert n_best <= beam_size, f"Can only return {beam_size} best hypotheses."
 
     # init
     bos_index = model.bos_index
@@ -453,14 +454,12 @@ def fcfs_beam_search(model: Model, size: int,
     trg_vocab_size = model.decoder.output_size
     device = encoder_output.device
     batch_size = src_mask.size(0)
-    att_vectors = None  # not used for Transformer
 
     # Recurrent models only: initialize RNN hidden state
     # pylint: disable=protected-access
-    hidden = None
-    encoder_output = tile(encoder_output.contiguous(), size,
-                          dim=0)  # batch*k x src_len x enc_hidden_size
-    src_mask = tile(src_mask, size, dim=0)  # batch*k x 1 x src_len
+    encoder_output = tile(encoder_output.contiguous(), beam_size,
+                          dim=0)  # (batch_size * beam_size, src_len, enc_hidden_size)
+    src_mask = tile(src_mask, beam_size, dim=0)  # (batch_size * beam_size, 1, src_len)
 
     # Transformer only: create target mask
     trg_mask = src_mask.new_ones([1, 1, 1])  # transformer only
@@ -471,29 +470,32 @@ def fcfs_beam_search(model: Model, size: int,
     # numbering elements in the batch
     batch_offset = torch.arange(batch_size, dtype=torch.long, device=device)
 
-    # numbering elements in the extended batch, i.e. beam size copies of each
-    # batch element
+    # numbering elements in the extended batch, i.e. beam_size copies of each batch element
     beam_offset = torch.arange(
         0,
-        batch_size * size,
-        step=size,
+        batch_size * beam_size,
+        step=beam_size,
         dtype=torch.long,
         device=device)
 
     # keeps track of the top beam size hypotheses to expand for each element
     # in the batch to be further decoded (that are still "alive")
     alive_seq = torch.full(
-        [batch_size * size, 1],
+        [batch_size * beam_size, 1],
         bos_index,
         dtype=torch.long,
-        device=device)
+        device=device)  # (batch_size * beam_size, hyp_len) ... now hyp_len = 1
 
-    # Give full probability to the first beam on the first step.
-    topk_log_probs = torch.zeros(batch_size, size, device=device)
+    # Give full probability (=zero in log space) to the first beam on the first step,
+    # since the only option of the first token is the BOS token.
+    topk_log_probs = torch.zeros(batch_size, beam_size, device=device)  # (batch_size, beam_size)
     topk_log_probs[:, 1:] = float("-inf")
 
     # Structure that holds finished hypotheses.
     hypotheses = [[] for _ in range(batch_size)]
+
+    # init remaining_batch_size
+    remaining_batch_size = len(batch_offset)
 
     results = {
         "predictions": [[] for _ in range(batch_size)],
@@ -501,129 +503,149 @@ def fcfs_beam_search(model: Model, size: int,
         "gold_score": [0] * batch_size,
     }
 
-    for step in range(max_output_length):
+    for step in range(1,max_output_length):
         # This decides which part of the predicted sentence we feed to the
         # decoder to make the next prediction.
         # For Transformer, we feed the complete predicted sentence so far.
         # For Recurrent models, only feed the previous target word prediction
-        decoder_input = alive_seq  # complete prediction so far
+        decoder_input = alive_seq  # complete prediction so far; (remaining_batch_size * beam_size, step)
 
         # expand current hypotheses
         # decode one single step
-        # logits: logits for final softmax
-        # pylint: disable=unused-variable
         with torch.no_grad():
-            logits, hidden, att_scores, att_vectors = model(
+            # logits: scores before final softmax, (remaining_batch_size * beam_size, step, trg_vocab_size)
+            logits, _, _, _ = model(
                 return_type="decode",
                 encoder_output=encoder_output,
-                encoder_hidden=encoder_hidden,
+                encoder_hidden=None,  # only for initializing decoder_hidden
                 src_mask=src_mask,
-                trg_input=decoder_input, #trg_embed = embed(decoder_input)
-                decoder_hidden=hidden,
-                att_vector=att_vectors,
+                trg_input=decoder_input,  # trg_embed = embed(decoder_input)
+                decoder_hidden=None,  # don't need to keep it for transformer
+                att_vector=None,   # don't need to keep it for transformer
                 unroll_steps=1,
                 trg_mask=trg_mask  # subsequent mask for Transformer only
             )
 
         # For the Transformer we made predictions for all time steps up to
         # this point, so we only want to know about the last time step.
-        logits = logits[:, -1]  # keep only the last time step
-        hidden = None           # we don't need to keep it for transformer
+        logits = logits[:, -1]  # (remaining_batch_size * beam_size, trg_vocab_size)
 
-        # batch*k x trg_vocab
-        log_probs = F.log_softmax(logits, dim=-1).squeeze(1)
+        # compute log probability over trg vocab given a previous beam sequence
+        log_probs = F.log_softmax(logits, dim=-1).squeeze(1)  # (remaining_batch_size * beam_size, trg_vocab_size)
 
-        # multiply probs by the beam probability (=add logprobs)
-        log_probs += topk_log_probs.view(-1).unsqueeze(1)
+        # multiply the vocab probs by the previous beam sequence probability (= add log_probs)
+        # 'topk_log_probs' shape: (remaining_batch_size, beam_size) -> (remaining_batch_size*beam_size, 1)
+        log_probs += topk_log_probs.reshape(-1, 1)  # (remaining_batch_size * beam_size, trg_vocab_size)
         curr_scores = log_probs.clone()
 
         # compute length penalty
-        if alpha > -1:
-            length_penalty = ((5.0 + (step + 1)) / 6.0) ** alpha
+        if alpha > 0:
+            length_penalty = ((5.0 + step) / 6.0) ** alpha
             curr_scores /= length_penalty
 
         # flatten log_probs into a list of possibilities
-        curr_scores = curr_scores.reshape(-1, size * trg_vocab_size)
+        curr_scores = curr_scores.reshape(-1, beam_size * trg_vocab_size)  # (remaining_batch_size, beam_size, trg_vocab_size)
 
-        # pick currently best top k hypotheses (flattened order)
-        topk_scores, topk_ids = curr_scores.topk(size, dim=-1)
+        # pick currently best top 2*k hypotheses (flattened order)
+        # `topk_scores` and `topk_index` shape: (remaining_batch_size, 2*beam_size)
+        top2k_scores, top2k_index = curr_scores.topk(2*beam_size, dim=-1)
 
-        if alpha > -1:
+        if alpha > 0:
             # recover original log probs
-            topk_log_probs = topk_scores * length_penalty
+            top2k_log_probs = top2k_scores * length_penalty  # (remaining_batch_size, 2*beam_size)
         else:
-            topk_log_probs = topk_scores.clone()
+            top2k_log_probs = top2k_scores.clone()  # (remaining_batch_size, 2*beam_size)
 
-        # reconstruct beam origin and true word ids from flattened order
-        topk_beam_index = topk_ids.floor_divide(trg_vocab_size)
-        topk_ids = topk_ids.fmod(trg_vocab_size)
+        # reconstruct beam origin and true vocab ids from flattened order
+        top2k_beam_origin_index = top2k_index.floor_divide(trg_vocab_size)  # (remaining_batch_size, 2*beam_size)
+        top2k_vocab_index = top2k_index.fmod(trg_vocab_size)  # (remaining_batch_size, 2*beam_size)
 
         # map beam_index to batch_index in the flat representation
         batch_index = (
-            topk_beam_index
-            + beam_offset[:topk_beam_index.size(0)].unsqueeze(1))
-        select_indices = batch_index.view(-1)
+            top2k_beam_origin_index                              # (remaining_batch_size, 2*beam_size)
+            + beam_offset[:remaining_batch_size].unsqueeze(1)   # (remaining_batch_size, 1)
+        )  # (remaining_batch_size, 2*beam_size)
+        select_index = batch_index.view(-1)  # (remaining_batch_size * 2*beam_size)
 
-        # append latest prediction
-        alive_seq = torch.cat(
-            [alive_seq.index_select(0, select_indices),
-             topk_ids.view(-1, 1)], -1)  # batch_size*k x hyp_len
+        # generate topk_seqs by appending the latest prediction to alive_seq
+        top2k_seqs = torch.cat([
+            alive_seq.index_select(dim=0, index=select_index),   # (remaining_batch_size * 2 * beam_size, step)
+            top2k_vocab_index.view(-1, 1)                        # (remaining_batch_size * 2 * beam_size, 1)
+            ], -1).reshape(remaining_batch_size, -1, step+1)   # (remaining_batch_size, 2 * beam_size, step+1)
 
-        is_finished = topk_ids.eq(eos_index)
-        if step + 1 == max_output_length:
-            is_finished.fill_(True)
-        # end condition is whether the top beam is finished
-        end_condition = is_finished[:, 0].eq(True)
+        # init `alive_seq` and `topk_batch_index` for the following processes
+        alive_seq = torch.zeros(remaining_batch_size, beam_size, step+1, dtype=torch.long, device=device)
+        topk_batch_index = torch.zeros([remaining_batch_size, beam_size], dtype=torch.long, device=device)
 
-        # save finished hypotheses
-        if is_finished.any():
-            predictions = alive_seq.view(-1, size, alive_seq.size(-1))
-            for i in range(is_finished.size(0)):
-                b = batch_offset[i]
-                if end_condition[i]:
-                    is_finished[i].fill_(1)
-                finished_hyp = is_finished[i].nonzero(as_tuple=False).view(-1)
-                # store finished hypotheses for this batch
-                for j in finished_hyp:
-                    # Check if the prediction has more than one EOS.
-                    # If it has more than one EOS, it means that the
-                    # prediction should have already been added to
-                    # the hypotheses, so you don't have to add them again.
-                    if (predictions[i, j, 1:] == eos_index).nonzero(
-                            as_tuple=False).numel() < 2:
-                        # ignore start_token
-                        hypotheses[b].append(
-                            (topk_scores[i, j], predictions[i, j, 1:])
-                        )
-                # if the batch reached the end, save the n_best hypotheses
-                if end_condition[i]:
-                    best_hyp = sorted(
-                        hypotheses[b], key=lambda x: x[0], reverse=True)
-                    for n, (score, pred) in enumerate(best_hyp):
-                        if n >= n_best:
-                            break
-                        results["scores"][b].append(score)
-                        results["predictions"][b].append(pred)
-            non_finished = end_condition.eq(False).nonzero(
-                as_tuple=False).view(-1)
-            # if all sentences are translated, no need to go further
-            # pylint: disable=len-as-condition
-            if len(non_finished) == 0:
-                break
-            # remove finished batches for the next step
-            topk_log_probs = topk_log_probs.index_select(0, non_finished)
-            batch_index = batch_index.index_select(0, non_finished)
-            batch_offset = batch_offset.index_select(0, non_finished)
-            alive_seq = predictions.index_select(0, non_finished) \
-                .view(-1, alive_seq.size(-1))
+        # save finished hypotheses, renew `alive_seq` and `topk_log_probs`,
+        # and check whether `end_condition` is True
+        end_condition = torch.full([remaining_batch_size], fill_value=False, device=device)
+        for b in range(remaining_batch_size):
+            b_org = batch_offset[b]
+            alive_seq_list = []
+            log_prob_list = []
+            batch_index_list = []
+            is_list_full = False
+            for seq, log_prob, score, b_index in zip(top2k_seqs[b], top2k_log_probs[b], top2k_scores[b], batch_index[b]):
+                if (seq[-1]==eos_index).item() or (step+1==max_output_length):
+                    hypotheses[b_org].append(
+                        (score, seq[1:])  # ignore start_token
+                    )
+                    if len(hypotheses[b_org]) == beam_size:
+                        end_condition[b] = True
+                        break
+                else:
+                    alive_seq_list.append(seq)
+                    log_prob_list.append(log_prob)
+                    batch_index_list.append(b_index)
+                    if len(alive_seq_list) == beam_size:
+                        is_list_full = True
+                        break
+
+            # if the batch reached the end, save the n_best hypotheses
+            if end_condition[b]:
+                best_hyp = sorted(
+                    hypotheses[b_org], key=lambda x: x[0], reverse=True)
+                for n, (score, seq) in enumerate(best_hyp):
+                    if n >= n_best:
+                        break
+                    results["scores"][b_org].append(score)
+                    results["predictions"][b_org].append(seq)
+
+            else:  # the batch did not reach the end
+                # if `*_list` are not full, fill them up
+                if not is_list_full:
+                    for i in range(beam_size-len(alive_seq_list)):
+                        alive_seq_list.append(alive_seq_list[-1])
+                        log_prob_list.append(float("-inf"))
+                        batch_index_list.append(batch_index_list[-1])
+                # renew alive_seq and topk_log_probs
+                alive_seq[b] = torch.stack(alive_seq_list)  # `alive_seq[b]` shape: (beam_size, hyp_len)
+                topk_log_probs[b] = torch.stack(log_prob_list)  # `topk_log_probs[b]` shape: (beam_size)
+                topk_batch_index[b] = torch.stack(batch_index_list)  # `topk_batch_index[b]` shape: (beam_size)
+
+        # batch indices of the examples which contain unfinished candidates
+        unfinished = end_condition.eq(False).nonzero(as_tuple=False).view(-1)
+        # if all examples are translated, no need to go further
+        if len(unfinished) == 0:
+            break
+
+        # remove finished examples for the next step
+        topk_batch_index = topk_batch_index.index_select(0, unfinished)  # (remaining_batch_size, beam_size)
+        topk_log_probs = topk_log_probs.index_select(0, unfinished)      # (remaining_batch_size, beam_size)
+        batch_offset = batch_offset.index_select(0, unfinished)          # (remaining_batch_size)
+        alive_seq = alive_seq.index_select(0, unfinished)                # (remaining_batch_size, beam_size, hyp_len)
+
+        # update remaining_batch_size
+        remaining_batch_size = len(batch_offset)
+
+        # reshape `alive_seq` to its original size
+        alive_seq = alive_seq.reshape(remaining_batch_size * beam_size, step+1)  # (remaining_batch_size*beam_size, hyp_len)
 
         # reorder indices, outputs and masks
-        select_indices = batch_index.view(-1)
-        encoder_output = encoder_output.index_select(0, select_indices)
-        src_mask = src_mask.index_select(0, select_indices)
-
-        if att_vectors is not None:
-            att_vectors = att_vectors.index_select(0, select_indices)
+        select_index = topk_batch_index.view(-1)
+        encoder_output = encoder_output.index_select(0, select_index)
+        src_mask = src_mask.index_select(0, select_index)
 
     def pad_and_stack_hyps(hyps, pad_value):
         filled = np.ones((len(hyps), max([h.shape[0] for h in hyps])),
@@ -636,26 +658,27 @@ def fcfs_beam_search(model: Model, size: int,
     # from results to stacked outputs
     assert n_best == 1
     # only works for n_best=1 for now
-    final_outputs = pad_and_stack_hyps([r[0].cpu().numpy() for r in
-                                        results["predictions"]],
-                                       pad_value=pad_index)
+    final_outputs = pad_and_stack_hyps(
+        [r[0].cpu().numpy() for r in results["predictions"]],
+        pad_value=pad_index)
 
     return final_outputs, None
 
 
 # pylint: disable=too-many-statements,too-many-branches
-def vanilla_beam_search(model: Model, size: int,
+def vanilla_beam_search(model: Model, beam_size: int,
                 encoder_output: Tensor, encoder_hidden: Tensor,
                 src_mask: Tensor, max_output_length: int,
                 alpha: float, n_best: int = 1) -> (np.array, np.array):
     """
-    Beam search with size k.
-    Inspired by OpenNMT-py, adapted for Transformer.
+    Vanilla beam search with size k.
+    based on beam_search and [this paper](https://arxiv.org/abs/2204.05424),
+    adapted for Transformer.
 
     In each decoding step, find the k most likely partial hypotheses.
 
     :param model:
-    :param size: size of the beam
+    :param beam_size: size of the beam
     :param encoder_output:
     :param encoder_hidden:
     :param src_mask:
@@ -666,8 +689,8 @@ def vanilla_beam_search(model: Model, size: int,
         - stacked_output: output hypotheses (2d array of indices),
         - stacked_attention_scores: attention scores (3d array)
     """
-    assert size > 0, 'Beam size must be >0.'
-    assert n_best <= size, 'Can only return {} best hypotheses.'.format(size)
+    assert beam_size > 0, 'Beam size must be >0.'
+    assert n_best <= beam_size, f'Can only return {beam_size} best hypotheses.'
 
     # init
     bos_index = model.bos_index
@@ -676,14 +699,12 @@ def vanilla_beam_search(model: Model, size: int,
     trg_vocab_size = model.decoder.output_size
     device = encoder_output.device
     batch_size = src_mask.size(0)
-    att_vectors = None  # not used for Transformer
 
     # Recurrent models only: initialize RNN hidden state
     # pylint: disable=protected-access
-    hidden = None
-    encoder_output = tile(encoder_output.contiguous(), size,
-                          dim=0)  # batch*k x src_len x enc_hidden_size
-    src_mask = tile(src_mask, size, dim=0)  # batch*k x 1 x src_len
+    encoder_output = tile(encoder_output.contiguous(), beam_size,
+                          dim=0)  # (batch_size * beam_size, src_len, enc_hidden_size)
+    src_mask = tile(src_mask, beam_size, dim=0)  # (batch_size * beam_size, 1, src_len)
 
     # Transformer only: create target mask
     trg_mask = src_mask.new_ones([1, 1, 1])  # transformer only
@@ -694,29 +715,32 @@ def vanilla_beam_search(model: Model, size: int,
     # numbering elements in the batch
     batch_offset = torch.arange(batch_size, dtype=torch.long, device=device)
 
-    # numbering elements in the extended batch, i.e. beam size copies of each
-    # batch element
+    # numbering elements in the extended batch, i.e. beam size copies of each batch element
     beam_offset = torch.arange(
         0,
-        batch_size * size,
-        step=size,
+        batch_size * beam_size,
+        step=beam_size,
         dtype=torch.long,
         device=device)
 
     # keeps track of the top beam size hypotheses to expand for each element
-    # in the batch to be further decoded (that are still "alive")
-    alive_seq = torch.full(
-        [batch_size * size, 1],
+    # in the batch to be further decoded
+    beam_seq = torch.full(
+        [batch_size * beam_size, 1],
         bos_index,
         dtype=torch.long,
-        device=device)
+        device=device)  # (remaining_batch_size * beam_size, hyp_len) ... now remaining_batch_size=batch_size, hyp_len=1
 
-    # Give full probability to the first beam on the first step.
-    topk_log_probs = torch.zeros(batch_size, size, device=device)
-    topk_log_probs[:, 1:] = float("-inf")
+    # Give full probability to the first beam on the first step; score := log prob.
+    # since the only option of the first token is the BOS token.
+    beam_score = torch.zeros(batch_size, beam_size, device=device)  # (remaining_batch_size, beam_size)
+    beam_score[:, 1:] = float("-inf")
 
     # Structure that holds finished hypotheses.
     hypotheses = [[] for _ in range(batch_size)]
+
+    # init remaining_batch_size
+    remaining_batch_size = len(batch_offset)
 
     results = {
         "predictions": [[] for _ in range(batch_size)],
@@ -724,118 +748,153 @@ def vanilla_beam_search(model: Model, size: int,
         "gold_score": [0] * batch_size,
     }
 
-    for step in range(max_output_length):
+    # indicator if the generation is finished
+    # `is_finished` shape: (remaining_batch_size, beam_size)
+    is_finished = torch.full((batch_size, beam_size),
+                             False,
+                             dtype=torch.bool,
+                             device=device)
+
+    for step in range(1,max_output_length):
         # This decides which part of the predicted sentence we feed to the
         # decoder to make the next prediction.
         # For Transformer, we feed the complete predicted sentence so far.
         # For Recurrent models, only feed the previous target word prediction
-        decoder_input = alive_seq  # complete prediction so far
+        decoder_input = beam_seq  # complete prediction so far; (remaining_batch_size * beam_size, step)
 
         # expand current hypotheses
         # decode one single step
-        # logits: logits for final softmax
-        # pylint: disable=unused-variable
         with torch.no_grad():
-            logits, hidden, att_scores, att_vectors = model(
+            # logits: scores before final softmax; (remaining_batch_size * beam_size, step, trg_vocab_size)
+            logits, _, _, _ = model(
                 return_type="decode",
                 encoder_output=encoder_output,
-                encoder_hidden=encoder_hidden,
+                encoder_hidden=None,      # only for initializing decoder_hidden
                 src_mask=src_mask,
-                trg_input=decoder_input, #trg_embed = embed(decoder_input)
-                decoder_hidden=hidden,
-                att_vector=att_vectors,
+                trg_input=decoder_input,  # trg_embed = embed(decoder_input)
+                decoder_hidden=None,      # don't need to keep it for transformer
+                att_vector=None,          # don't need to keep it for transformer
                 unroll_steps=1,
-                trg_mask=trg_mask  # subsequent mask for Transformer only
+                trg_mask=trg_mask         # subsequent mask for Transformer only
             )
 
         # For the Transformer we made predictions for all time steps up to
         # this point, so we only want to know about the last time step.
-        logits = logits[:, -1]  # keep only the last time step
-        hidden = None           # we don't need to keep it for transformer
+        logits = logits[:, -1]  # (remaining_batch_size * beam_size, trg_vocab_size)
 
-        # batch*k x trg_vocab
-        log_probs = F.log_softmax(logits, dim=-1).squeeze(1)
-
-        # multiply probs by the beam probability (=add logprobs)
-        log_probs += topk_log_probs.view(-1).unsqueeze(1)
-        curr_scores = log_probs.clone()
+        # compute log probability over trg vocab given a previous sequence
+        log_probs = F.log_softmax(logits, dim=-1).squeeze(1)   # (remaining_batch_size * beam_size, trg_vocab_size)
 
         # compute length penalty
-        if alpha > -1:
-            length_penalty = ((5.0 + (step + 1)) / 6.0) ** alpha
-            curr_scores /= length_penalty
+        if alpha > 0:
+            if step == 1:
+                length_penalty_prev = 1.0
+            length_penalty = ((5.0 + step) / 6.0) ** alpha
+            score_adjust_coeff = length_penalty_prev / length_penalty
+        else:
+            length_penalty = 1.0
+            score_adjust_coeff = 1.0
+
+        # correct `log_probs` and `score_adjust_coeff` for the score calculation
+        if is_finished.any():
+            # `is_finished` shape : (remaining_batch_size, beam_size)
+            finished_index = is_finished.reshape(-1).nonzero().reshape(-1)
+
+            # correct `log_probs` so that the finished sequence never gets a vocab other than EOS
+            log_probs[finished_index] = float('-inf')
+            log_probs[finished_index, eos_index] = 0.0
+
+            # correct `score_adjust_coeff` so that the scores of the finished sequences do not change
+            # `score_adjust_coeff` shape: (1) -> (remaining_batch_size * beam_size)
+            score_adjust_coeff *= torch.ones((remaining_batch_size*beam_size,1), device=device)
+            score_adjust_coeff[finished_index] = 1.0
+
+        # calc corr_scores
+        # 'beam_score': (remaining_batch_size, beam_size) -> (remaining_batch_size*beam_size, 1)
+        beam_score = beam_score.reshape(-1, 1)
+        # 'beam_vocab_score': (batch_size*beam_size, trg_vocab_size)
+        beam_vocab_score = score_adjust_coeff * beam_score + 1/length_penalty * log_probs
 
         # flatten log_probs into a list of possibilities
-        curr_scores = curr_scores.reshape(-1, size * trg_vocab_size)
+        beam_vocab_score = beam_vocab_score.reshape(-1, beam_size * trg_vocab_size)  # (remaining_batch_size, beam_size*trg_vocab_size)
 
         # pick currently best top k hypotheses (flattened order)
-        topk_scores, topk_ids = curr_scores.topk(size, dim=-1)
-
-        if alpha > -1:
-            # recover original log probs
-            topk_log_probs = topk_scores * length_penalty
-        else:
-            topk_log_probs = topk_scores.clone()
+        # `beam_score` and `beam_index` shape: (remaining_batch_size, beam_size)
+        beam_score, beam_index = beam_vocab_score.topk(beam_size, dim=-1)
 
         # reconstruct beam origin and true word ids from flattened order
-        topk_beam_index = topk_ids.floor_divide(trg_vocab_size)
-        topk_ids = topk_ids.fmod(trg_vocab_size)
+        beam_origin_index = beam_index.floor_divide(trg_vocab_size)  # (remaining_batch_size, beam_size)
+        vocab_index = beam_index.fmod(trg_vocab_size)  # (remaining_batch_size, beam_size)
 
         # map beam_index to batch_index in the flat representation
         batch_index = (
-            topk_beam_index
-            + beam_offset[:topk_beam_index.size(0)].unsqueeze(1))
-        select_indices = batch_index.view(-1)
+            beam_origin_index                                # (remaining_batch_size, beam_size)
+            + beam_offset[:remaining_batch_size].unsqueeze(1)   # (remaining_batch_size, 1)
+        )  # (remaining_batch_size, beam_size)
+        select_index = batch_index.view(-1)  # (remaining_batch_size * beam_size)
 
-        # append latest prediction
-        alive_seq = torch.cat(
-            [alive_seq.index_select(0, select_indices),
-             topk_ids.view(-1, 1)], -1)  # batch_size*k x hyp_len
+        # append the latest prediction
+        beam_seq = torch.cat([
+            beam_seq.index_select(0, select_index),        # (remaining_batch_size * beam_size, step)
+            vocab_index.view(-1, 1)                          # (remaining_batch_size * beam_size, 1)
+        ], -1).reshape(remaining_batch_size, -1, step+1)  # (remaining_batch_size, beam_size, step+1)
 
-        is_finished = topk_ids.eq(eos_index)
+        # update `is_finished`; (remaining_batch_size, beam_size)
+        is_finished = is_finished.view(-1).index_select(0, select_index).reshape(remaining_batch_size, beam_size)
+        is_finished = vocab_index.eq(eos_index) | is_finished | beam_score.eq(-np.inf)
         if step + 1 == max_output_length:
             is_finished.fill_(True)
-        # end condition is whether the top beam is finished
-        end_condition = is_finished[:, 0].eq(True)
+
+        # end condition is whether the all beam is finished
+        end_condition = is_finished.all(dim=-1)  # (remaining_batch_size)
 
         # save finished hypotheses
-        if is_finished.any():
-            predictions = alive_seq.view(-1, size, alive_seq.size(-1))
-            non_finished = end_condition.eq(False).nonzero(
-                as_tuple=False).view(-1)
-            # if all sentences are translated, no need to go further
-            # pylint: disable=len-as-condition
-            if len(non_finished) == 0:
-                break
-            # remove finished batches for the next step
-            # topk_log_probs = topk_log_probs.index_select(0, non_finished)
-            # batch_index = batch_index.index_select(0, non_finished)
-            # batch_offset = batch_offset.index_select(0, non_finished)
-            # alive_seq = predictions.index_select(0, non_finished) \
-            #     .view(-1, alive_seq.size(-1))
+        if end_condition.any():
+            # this is a redundant process and may be a good fix in the future
+            # (we don't need 'hypotheses' and can directory save score and seq to `best_hyp`.)
+            for b in [x.item() for x in end_condition.nonzero()]:
+                b_org = batch_offset[b]
+                for score, seq in zip(beam_score[b], beam_seq[b]):
+                    if seq.eq(eos_index).count_nonzero().item() >= 2:
+                        seq = seq[:seq.eq(eos_index).nonzero()[0].item()+1]
+                    hypotheses[b_org].append(
+                        (score, seq[1:])  # ignore start_token
+                    )
+                best_hyp = sorted(
+                    hypotheses[b_org], key=lambda x: x[0], reverse=True)
+                for n, (score, seq) in enumerate(best_hyp):
+                    if n >= n_best:
+                        break
+                    results["scores"][b_org].append(score)
+                    results["predictions"][b_org].append(seq)
+
+        # batch indices of the examples which contain unfinished candidates
+        unfinished = end_condition.eq(False).nonzero(as_tuple=False).view(-1)
+
+        # if all examples are translated, no need to go further
+        if len(unfinished) == 0:
+            break
+
+        # remove finished examples for the next step
+        batch_index = batch_index.index_select(0, unfinished)  # (remaining_batch_size, beam_size)
+        beam_score = beam_score.index_select(0, unfinished)  # (remaining_batch_size, beam_size)
+        batch_offset = batch_offset.index_select(0, unfinished)  # (remaining_batch_size)
+        beam_seq = beam_seq.index_select(0, unfinished)  # (remaining_batch_size, beam_size, hyp_len)
+        is_finished = is_finished.index_select(0, unfinished)  # (remaining_batch_size, beam_size)
+
+        # update remaining_batch_size
+        remaining_batch_size = len(batch_offset)
+
+        # reshape `beam_seq` to its original size
+        beam_seq = beam_seq.reshape(remaining_batch_size * beam_size, step + 1)  # (remaining_batch_size*beam_size, hyp_len)
 
         # reorder indices, outputs and masks
         select_indices = batch_index.view(-1)
         encoder_output = encoder_output.index_select(0, select_indices)
         src_mask = src_mask.index_select(0, select_indices)
 
-        if att_vectors is not None:
-            att_vectors = att_vectors.index_select(0, select_indices)
-
-    predictions = alive_seq.view(-1, size, alive_seq.size(-1))
-    for i in range(predictions.size(0)):
-        b = batch_offset[i]
-        for j in range(predictions.size(1)):
-            hypotheses[b].append(
-                (topk_scores[i, j], predictions[i, j, 1:])
-            )
-        best_hyp = sorted(
-            hypotheses[b], key=lambda x: x[0], reverse=True)
-        for n, (score, pred) in enumerate(best_hyp):
-            if n >= n_best:
-                break
-            results["scores"][b].append(score)
-            results["predictions"][b].append(pred)
+        # update previous length prenalty with current one
+        length_penalty_prev = length_penalty
 
     def pad_and_stack_hyps(hyps, pad_value):
         filled = np.ones((len(hyps), max([h.shape[0] for h in hyps])),
@@ -848,11 +907,275 @@ def vanilla_beam_search(model: Model, size: int,
     # from results to stacked outputs
     assert n_best == 1
     # only works for n_best=1 for now
-    final_outputs = pad_and_stack_hyps([r[0].cpu().numpy() for r in
-                                        results["predictions"]],
-                                       pad_value=pad_index)
+    final_outputs = pad_and_stack_hyps(
+        [r[0].cpu().numpy() for r in results["predictions"]],
+        pad_value=pad_index)
 
     return final_outputs, None
+
+
+def compute_threshold_by_vanilla_beam_search(model: Model, beam_size: int,
+                                             encoder_output: Tensor, encoder_hidden: Tensor,
+                                             src_mask: Tensor, max_output_length: int,
+                                             alpha: float, n_best: int = None) -> (np.array, np.array):
+    """
+    Compute thresholds for soft beam policy based on vanilla_beam_search with size k.
+
+    :param model:
+    :param beam_size: size of the beam
+    :param encoder_output:
+    :param encoder_hidden:
+    :param src_mask:
+    :param max_output_length:
+    :param alpha: `alpha` factor for length penalty
+    :param n_best: return this many hypotheses, <= beam
+    :return:
+        - thresholds: torch.tensor (max_output_length),
+        - beam_seq_of_all_steps: [beam_seq(step=0), ..., beam_seq(step=max_output_length-1)]
+    """
+    assert beam_size > 0, 'Beam size must be >0.'
+    if n_best is None:
+        n_best = beam_size
+    else:
+        assert n_best <= beam_size, f'Can only return {beam_size} best hypotheses.'
+
+    # init
+    bos_index = model.bos_index
+    eos_index = model.eos_index
+    pad_index = model.pad_index
+    trg_vocab_size = model.decoder.output_size
+    device = encoder_output.device
+    batch_size = src_mask.size(0)
+
+    # Recurrent models only: initialize RNN hidden state
+    # pylint: disable=protected-access
+    encoder_output_beam = tile(encoder_output.contiguous(), beam_size, dim=0)  # (batch_size * beam_size, src_len, enc_hidden_size)
+    encoder_output_alive = encoder_output.contiguous()  # (batch_size, src_len, enc_hidden_size)
+    src_mask_beam = tile(src_mask, beam_size, dim=0)  # (batch_size * beam_size, 1, src_len)
+    src_mask_alive = src_mask  # (batch_size, 1, src_len)
+
+    # Transformer only: create target mask
+    trg_mask = src_mask.new_ones([1, 1, 1])  # transformer only
+    if isinstance(model, torch.nn.DataParallel):
+        trg_mask = torch.stack(
+            [src_mask.new_ones([1, 1]) for _ in model.device_ids])
+
+    # numbering elements in the extended batch, i.e. beam size copies of each batch element
+    beam_offset = torch.arange(0, batch_size * beam_size,
+                               step=beam_size,
+                               dtype=torch.long,
+                               device=device)
+
+    # keeps track of the beam hypotheses to expand for each element
+    beam_seq = torch.full(
+        [batch_size * beam_size, 1],
+        bos_index,
+        dtype=torch.long,
+        device=device)  # (batch_size * beam_size, hyp_len) ... now hyp_len = 1
+
+    # keeps track of the scores of the beam hypotheses
+    beam_score = torch.zeros(batch_size, beam_size, device=device)  # (batch_size, beam_size)
+    # give full probability to the first beam on the first step; score := log 1 * coeff = 0,
+    # since the only option of the first token is the BOS token.
+    beam_score[:, 1:] = float("-inf")
+
+    # keeps flag whether the all beam is finished
+    are_all_beam_finished =torch.full(
+        [batch_size], False, dtype=torch.bool, device=device
+    )  # (batch_size)
+
+    # size of finished batch
+    finished_batch_size = 0
+
+    # keeps track of unfinished hypotheses for the case that all beam hypotheses are finished
+    alive_seq = torch.full([0,1], bos_index, dtype=torch.long, device=device)  # (finished_batch_size, hpy_len) ... for now (0,1)
+
+    # keeps threshold of each step
+    thresholds = torch.full(
+        [batch_size, max_output_length], -float('inf'),
+        dtype=torch.float,
+        device=device)  # (batch_size, max_output_length)
+
+    # keeps results of each step of beam hypotheses
+    beam_seq_of_all_steps = [[] for _ in range(max_output_length)]  # [beam_seq at step 0, ... , beam_seq at step max_output_length-1]
+    beam_seq_of_all_steps[0] = beam_seq.reshape(batch_size,beam_size,1)
+
+    # indicator if each beam seq is finished
+    beam_finished = torch.full((batch_size, beam_size),
+                               False,
+                               dtype=torch.bool,
+                               device=device)  # (batch_size, beam_size)
+
+    for step in range(1,max_output_length):
+        # This decides which part of the predicted sentence we feed to the decoder to make the next prediction.
+        # For Transformer, we feed the complete predicted sentence so far.
+        # For Recurrent models, only feed the previous target word prediction
+        encoder_output = torch.vstack([encoder_output_beam, encoder_output_alive[are_all_beam_finished]])
+        src_mask = torch.vstack([src_mask_beam, src_mask_alive[are_all_beam_finished]])
+        decoder_input = torch.vstack([beam_seq, alive_seq])  # (batch_size * beam_size + finished_batch_size, step)
+
+        # expand current hypotheses
+        # decode one single step
+        with torch.no_grad():
+            # logits: scores before final softmax; (batch_size * beam_size + finished_batch_size, step, trg_vocab_size)
+            logits, _, _, _ = model(
+                return_type="decode",
+                encoder_output=encoder_output,
+                encoder_hidden=None,  # only for initializing decoder_hidden
+                src_mask=src_mask,
+                trg_input=decoder_input,  # trg_embed = embed(decoder_input)
+                decoder_hidden=None,  # don't need to keep it for transformer
+                att_vector=None,  # don't need to keep it for transformer
+                unroll_steps=1,
+                trg_mask=trg_mask,  # subsequent mask for Transformer only
+                finished=beam_finished.reshape(batch_size*beam_size).nonzero().squeeze(),
+                eos_index=eos_index
+            )
+
+        # For the Transformer we made predictions for all time steps up to
+        # this point, so we only want to know about the last time step.
+        logits = logits[:, -1]  # (batch_size * beam_size + finished_batch_size, trg_vocab_size)
+
+        # compute log probability over trg vocab given a previous sequence
+        log_probs = F.log_softmax(logits, dim=-1).squeeze(1)  # (batch_size * beam_size + finished_batch_size, trg_vocab_size)
+        beam_vocab_score = log_probs[:(batch_size * beam_size), :]
+        alive_vocab_score = log_probs[(batch_size * beam_size):, :]
+
+        # compute length penalty
+        if alpha > 0:
+            if step == 1:
+                length_penalty_prev = 1.0
+            length_penalty = ((5.0 + step) / 6.0) ** alpha
+            score_adjust_coeff = length_penalty_prev / length_penalty
+        else:
+            length_penalty = 1.0
+            score_adjust_coeff = 1.0
+
+        # apply length penalty to 'alive_vocab_score'
+        if finished_batch_size > 0:
+            # 'alive_vocab_score': (finished_batch_size, trg_vocab_size)
+            alive_vocab_score = score_adjust_coeff * alive_score + 1/length_penalty * alive_vocab_score
+
+        # correct `score_adjust_coeff` for  `beam_vocab_score`
+        if beam_finished.any():
+            # `beam_finished` shape : (batch_size, beam_size)
+            finished_ids = beam_finished.reshape(-1).nonzero().reshape(-1)
+
+            # correct `log_probs` so that the finished sequence never gets a vocab other than EOS
+            # log_probs[finished_ids] = float('-inf')   # This is no longer needed since the decoder has taken care of it. will be removed soon.
+            # log_probs[finished_ids, eos_index] = 0.0  # This is no longer needed since the decoder has taken care of it. will be removed soon.
+
+            # correct `score_adjust_coeff` so that the scores of the finished sequences do not change
+            # `score_adjust_coeff` shape: (1) -> (batch_size * beam_size + finished_batch_size)
+            score_adjust_coeff *= torch.ones((batch_size*beam_size+finished_batch_size,1), device=device)
+            score_adjust_coeff[finished_ids] = 1.0
+
+        # apply length penalty to `beam_vocab_score`
+        # 'beam_score': (batch_size, beam_size) -> (batch_size*beam_size, 1)
+        beam_score = beam_score.reshape(-1, 1)
+        # 'beam_vocab_score': (batch_size*beam_size, trg_vocab_size)
+        beam_vocab_score = score_adjust_coeff * beam_score + 1/length_penalty * beam_vocab_score
+
+        # flatten 'beam_vocab_score':  (batch_size*beam_size, trg_vocab_size) -> (batch_size, beam_size*trg_vocab_size)
+        beam_vocab_score = beam_vocab_score.reshape(batch_size, beam_size * trg_vocab_size)
+
+        # pick currently best top k hypotheses as beam set (flattened order)
+        # `aug_beam_score` and `aug_beam_ids` shape: (batch_size, beam_size+1)
+        # 'aug' is the abbreviation for 'augmented'.
+        aug_beam_score, aug_beam_index = beam_vocab_score.topk(beam_size+1, dim=-1, largest=True, sorted=True)
+
+        # reconstruct beam origin and true word ids from flattened order
+        beam_origin_index = aug_beam_index.floor_divide(trg_vocab_size)  # (batch_size, beam_size+1)
+        vocab_index = aug_beam_index.fmod(trg_vocab_size)  # (batch_size, beam_size+1)
+
+        # compute `arg_beam_finished`; (batch_size, beam_size+1)
+        aug_beam_finished = vocab_index.eq(eos_index) | aug_beam_score.eq(-np.inf)
+
+        # map beam_index to selected_index in the flat representation
+        select_index = (
+            beam_origin_index           # (batch_size, beam_size+1)
+            + beam_offset.unsqueeze(1)  # (batch_size, 1)
+        )  # (batch_size, beam_size)
+        select_index = select_index.view(-1)  # (batch_size * (beam_size+1))
+
+        # append the latest prediction
+        aug_beam_seq = torch.cat([
+            beam_seq.index_select(0, select_index),  # (batch_size * (beam_size+1), step)
+            vocab_index.view(-1, 1)                   # (batch_size * (beam_size+1), 1)
+        ], -1).reshape(batch_size, beam_size+1, step + 1)    # (batch_size, beam_size+1, step+1)
+
+        # separate results into 'beam_*' and 'runnerup_*'
+        beam_seq_old = beam_seq  # this will be used in the process "calc thresholds"
+        beam_score = aug_beam_score[:, :beam_size]        # (batch_size, beam_size)
+        beam_finished = aug_beam_finished[:, :beam_size]  # (batch_size, beam_size)
+        beam_seq = aug_beam_seq[:, :beam_size, :]         # (batch_size, beam_size, step+1)
+        runnerup_score = aug_beam_score[:, -1]        # (batch_size)
+        runnerup_finished = aug_beam_finished[:, -1]  # (batch_size)
+        runnerup_seq = aug_beam_seq[:, -1, :]         # (batch_size, step+1)
+
+        # backup beam_seq
+        beam_seq_of_all_steps[step] = beam_seq
+
+        # reshape `beam_seq` to its original size
+        beam_seq = beam_seq.reshape(batch_size * beam_size, step + 1)  # (batch_size*beam_size, hyp_len)
+
+        # compute the flag whether the all beam is finished
+        are_all_beam_finished_new = beam_finished.all(dim=-1)  # (batch_size)
+
+        # calc thresholds
+        if step < max_output_length-1 and n_best == beam_size:
+            alive_index_old = 0
+            alive_seq_old = alive_seq
+            alive_seq = torch.full([0,step+1], bos_index, dtype=torch.long, device=device)
+            alive_score = torch.zeros([0], device=device)
+            for batch_index in range(batch_size):
+
+                if not are_all_beam_finished[batch_index]:
+                    thresholds[batch_index, step] = (beam_score[batch_index,-1] + runnerup_score[batch_index]) /2
+
+                    # find unfinished sequence
+                    if are_all_beam_finished_new[batch_index]:
+                        if not runnerup_finished[batch_index]:
+                            seq = runnerup_seq[batch_index]
+                        else:
+                            sorted_index = beam_vocab_score[batch_index].argsort(descending=True)  # (beam_size*trg_vocab_size)
+                            vocab_index = sorted_index.fmod(trg_vocab_size)
+                            unfinished = ~ vocab_index.eq(eos_index)
+                            first_unfinished_index = (unfinished * torch.arange(unfinished.shape[0],0,-1)).argmax()
+                            beam_origin_index = sorted_index[first_unfinished_index].floor_divide(trg_vocab_size)
+                            seq = torch.cat([
+                                beam_seq_old[beam_origin_index],
+                                vocab_index[first_unfinished_index].unsqueeze(-1)
+                            ])  # (step+1)
+                        alive_seq = torch.vstack([alive_seq, seq])
+
+                else:
+                    # prep
+                    score, vocab_index = alive_vocab_score[alive_index_old].sort(descending=True)  # (trg_vocab_size)
+                    unfinished = ~ vocab_index.eq(eos_index)
+                    first_unfinished_index = (unfinished * torch.arange(unfinished.shape[0], 0, -1)).argmax()
+                    seq = torch.cat([
+                        alive_seq_old[alive_index_old],
+                        vocab_index[first_unfinished_index].unsqueeze(-1)
+                    ])  # (step+1)
+                    # comp threshold and alive_seq
+                    th_up = beam_score[batch_index, -1]
+                    if (score > th_up).all():
+                        # for the case that all scores are over the th_up
+                        th_dn = th_up - 0.1
+                    else:
+                        th_dn = score[score < th_up].max()
+                    thresholds[batch_index, step] = (th_up + th_dn) /2
+                    alive_seq = torch.vstack([alive_seq, seq])
+                    alive_index_old += 1
+
+        else:
+            # calc threshold (Since this is the final step, there is no need for `alive_*` anymore.)
+            thresholds[:, step] = beam_score[:,(n_best-1):(n_best+1)].mean(dim=-1)
+
+        are_all_beam_finished = are_all_beam_finished_new
+
+    return thresholds, beam_seq_of_all_steps
 
 
 def run_batch(model: Model, batch: Batch, max_output_length: int,
@@ -890,7 +1213,7 @@ def run_batch(model: Model, batch: Batch, max_output_length: int,
     else:  # beam search
         stacked_output, stacked_attention_scores = vanilla_beam_search(
             model=model,
-            size=beam_size,
+            beam_size=beam_size,
             encoder_output=encoder_output,
             encoder_hidden=encoder_hidden,
             src_mask=batch.src_mask,

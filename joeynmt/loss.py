@@ -87,7 +87,7 @@ class ReinforceLoss(nn.Module):
         self.baseline = baseline
         self.reward = reward
         self.bleu = []
-        
+
     def forward(self, predicted, gold, log_probs):
         """
         Compute the reinforce loss using logprobs and bleu scores
