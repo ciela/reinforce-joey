@@ -178,6 +178,7 @@ class TrainManager:
                 .get("remove_whitespace", True)
             self.sacrebleu["tokenize"] = test_config["sacrebleu"] \
                 .get("tokenize", "13a")
+        self.beam_size = test_config.get("beam_size", 5)
 
         # learning rate scheduling
         self.scheduler, self.scheduler_step_at = build_scheduler(
@@ -534,7 +535,8 @@ class TrainManager:
             topk=self.topk,
             log_probabilities=self.log_probabilities,
             pickle_logs=self.pickle_logs,
-            max_adoption_size=self.max_adoption_size)
+            max_adoption_size=self.max_adoption_size,
+            beam_size=self.beam_size)
 
             if self.method == "a2c":
                 losses = batch_loss

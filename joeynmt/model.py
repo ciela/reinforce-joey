@@ -258,7 +258,7 @@ class Model(nn.Module):
 
     def soft_beam_search(self, max_output_length, src: Tensor, trg: Tensor, src_mask: Tensor,
             src_length: Tensor, temperature: float, topk: int, log_probabilities: False, pickle_logs:False,
-            alpha: float = 1., gumbel_scale: float = 1., max_adoption_size: int = 100):
+            alpha: float = 1., gumbel_scale: float = 1., max_adoption_size: int = 100, beam_size: int = 5):
         """ Computes forward pass for Soft Beam Search
 
         Encodes source, then step by step decodes and samples token from output distribution.
@@ -317,7 +317,7 @@ class Model(nn.Module):
         # run beam search and get thresholds
         with torch.no_grad():
             thresholds, _ = self._compute_threshold_by_vanilla_beam_search(
-                5, encoder_output, encoder_hidden, src_mask, max_output_length, alpha
+                beam_size, encoder_output, encoder_hidden, src_mask, max_output_length, alpha
             )
 
         # decode tokens with soft beam search
@@ -844,6 +844,7 @@ class Model(nn.Module):
             log_probabilities=kwargs["log_probabilities"],
             pickle_logs=kwargs["pickle_logs"],
             max_adoption_size=kwargs["max_adoption_size"],
+            beam_size=kwargs["beam_size"],
             )
             return_tuple = (loss, logging, None, None)
 
