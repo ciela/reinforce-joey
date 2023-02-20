@@ -849,6 +849,9 @@ class Model(nn.Module):
             pickle_logs=kwargs["pickle_logs"],
             max_adoption_size=kwargs["max_adoption_size"],
             beam_size=kwargs["beam_size"],
+            gumbel_loc=kwargs.get("gumbel_loc", 0.),
+            gumbel_scale=kwargs.get("gumbel_scale", 1.),
+            tau_op=kwargs.get("tau_op", 0.5),
             )
             return_tuple = (loss, logging, None, None)
 
