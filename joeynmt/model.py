@@ -294,9 +294,6 @@ class Model(nn.Module):
         def adoption_model(log_prob: Tensor, tau: Tensor) -> Tensor:
             return 1 - gumbel_dist.cdf(-(log_prob - tau))
 
-        def length_norm(l: int) -> float:
-            return (5 + l) ** alpha / (5 + 1) ** alpha
-
         encoder_output, encoder_hidden = self._encode(src, src_length, src_mask)
         # if maximum output length is not globally specified, adapt to src len
         if max_output_length is None:
@@ -304,7 +301,7 @@ class Model(nn.Module):
         batch_size = src_mask.size(0)
         # define sets of sequences and scores (cumulative sum of score function)
         ys_tokens = encoder_output.new_full([batch_size, 1], self.bos_index, dtype=torch.long)
-        ys_scores = encoder_output.new_full([batch_size, 1], 0., dtype=torch.float)
+        ys_scores = encoder_output.new_zeros([batch_size, 1])
         trg_mask = src_mask.new_ones([1, 1, 1])
         distributions = []
         log_probs = 0
@@ -313,6 +310,7 @@ class Model(nn.Module):
             if hasattr(self.decoder,'_init_hidden') else 0
         attention_vectors = None
         finished = initial_finished()
+        length_norms = encoder_output.new_zeros([batch_size, 1])
 
         # run beam search and get thresholds
         with torch.no_grad():
@@ -337,9 +335,13 @@ class Model(nn.Module):
                 eos_index=self.eos_index,
             )
             logits = logits[:, -1] / temperature
-            log_probs += torch.log_softmax(logits, dim=1)  # sampling probability of pg
-            # TODO EOSを迎えたシーケンスのlenght norm値はそこで打ち止め
-            log_probs_norm = log_probs / length_norm(l)  # apply length normalization with current length l
+            # sampling probability of pg
+            log_probs += torch.log_softmax(logits, dim=1)
+            # find length normalization mask (True for not EOSed sequence)
+            ln_mask = ~(logits[:, self.eos_index] == 0).unsqueeze(1)
+            # apply length normalization with current length l
+            length_norms[ln_mask] = (5 + l) ** alpha / (5 + 1) ** alpha
+            log_probs_norm = log_probs / length_norms
             # eval end
 
             # re-initialize finished
@@ -370,6 +372,7 @@ class Model(nn.Module):
             src_mask = src_mask.index_select(0, adopted_indexes)
             log_probs = log_probs.index_select(0, adopted_indexes)
             trg = trg.index_select(0, adopted_indexes)
+            length_norms = length_norms.index_select(0, adopted_indexes)
             distributions.append(Categorical(logits=logits.index_select(0, adopted_indexes)))
             # adoption end
 
