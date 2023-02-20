@@ -137,7 +137,8 @@ def validate_on_data(model: Model, data: Dataset,
                         critic=critic,
                         log_probabilities=log_probabilities,
                         pickle_logs=pickle_logs,
-                        max_adoption_size=max_adoption_size)
+                        max_adoption_size=max_adoption_size,
+                        beam_size=beam_size)
 
                     if method == "a2c":
                         losses = batch_loss

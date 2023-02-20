@@ -256,9 +256,9 @@ class Model(nn.Module):
                 Qs_to_return, rewards, mrt=True, samples=samples)) \
                 if log_probabilities else (batch_loss, [])
 
-    def soft_beam_search(self, max_output_length, src: Tensor, trg: Tensor, src_mask: Tensor,
+    def soft_beam_policy(self, max_output_length, src: Tensor, trg: Tensor, src_mask: Tensor,
             src_length: Tensor, temperature: float, topk: int, log_probabilities: False, pickle_logs:False,
-            alpha: float = 1., gumbel_scale: float = 1., max_adoption_size: int = 100):
+            alpha: float = 1., gumbel_scale: float = 1., max_adoption_size: int = 100, beam_size: int = 5):
         """ Computes forward pass for Soft Beam Search
 
         Encodes source, then step by step decodes and samples token from output distribution.
@@ -294,9 +294,6 @@ class Model(nn.Module):
         def adoption_model(log_prob: Tensor, tau: Tensor) -> Tensor:
             return 1 - gumbel_dist.cdf(-(log_prob - tau))
 
-        def length_norm(l: int) -> float:
-            return (5 + l) ** alpha / (5 + 1) ** alpha
-
         encoder_output, encoder_hidden = self._encode(src, src_length, src_mask)
         # if maximum output length is not globally specified, adapt to src len
         if max_output_length is None:
@@ -304,7 +301,7 @@ class Model(nn.Module):
         batch_size = src_mask.size(0)
         # define sets of sequences and scores (cumulative sum of score function)
         ys_tokens = encoder_output.new_full([batch_size, 1], self.bos_index, dtype=torch.long)
-        ys_scores = encoder_output.new_full([batch_size, 1], 0., dtype=torch.float)
+        ys_scores = encoder_output.new_zeros([batch_size, 1])
         trg_mask = src_mask.new_ones([1, 1, 1])
         distributions = []
         log_probs = 0
@@ -313,11 +310,12 @@ class Model(nn.Module):
             if hasattr(self.decoder,'_init_hidden') else 0
         attention_vectors = None
         finished = initial_finished()
+        length_norms = encoder_output.new_zeros([batch_size, 1])
 
         # run beam search and get thresholds
         with torch.no_grad():
             thresholds, _ = self._compute_threshold_by_vanilla_beam_search(
-                5, encoder_output, encoder_hidden, src_mask, max_output_length, alpha
+                beam_size, encoder_output, encoder_hidden, src_mask, max_output_length, alpha
             )
 
         # decode tokens with soft beam search
@@ -337,8 +335,13 @@ class Model(nn.Module):
                 eos_index=self.eos_index,
             )
             logits = logits[:, -1] / temperature
-            log_probs += torch.log_softmax(logits, dim=1)  # sampling probability of pg
-            log_probs_norm = log_probs / length_norm(l)  # apply length normalization with current length l
+            # sampling probability of pg
+            log_probs += torch.log_softmax(logits, dim=1)
+            # find length normalization mask (True for not EOSed sequence)
+            ln_mask = ~(logits[:, self.eos_index] == 0).unsqueeze(1)
+            # apply length normalization with current length l
+            length_norms[ln_mask] = (5 + l) ** alpha / (5 + 1) ** alpha
+            log_probs_norm = log_probs / length_norms
             # eval end
 
             # re-initialize finished
@@ -369,6 +372,7 @@ class Model(nn.Module):
             src_mask = src_mask.index_select(0, adopted_indexes)
             log_probs = log_probs.index_select(0, adopted_indexes)
             trg = trg.index_select(0, adopted_indexes)
+            length_norms = length_norms.index_select(0, adopted_indexes)
             distributions.append(Categorical(logits=logits.index_select(0, adopted_indexes)))
             # adoption end
 
@@ -833,7 +837,7 @@ class Model(nn.Module):
             return_tuple = (loss, logging, None, None)
 
         elif return_type == "sbs":
-            loss, logging = self.soft_beam_search(
+            loss, logging = self.soft_beam_policy(
             src=kwargs["src"],
             trg=kwargs["trg"],
             src_mask=kwargs["src_mask"],
@@ -844,6 +848,7 @@ class Model(nn.Module):
             log_probabilities=kwargs["log_probabilities"],
             pickle_logs=kwargs["pickle_logs"],
             max_adoption_size=kwargs["max_adoption_size"],
+            beam_size=kwargs["beam_size"],
             )
             return_tuple = (loss, logging, None, None)
 
