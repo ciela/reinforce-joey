@@ -338,6 +338,7 @@ class Model(nn.Module):
             )
             logits = logits[:, -1] / temperature
             log_probs += torch.log_softmax(logits, dim=1)  # sampling probability of pg
+            # TODO EOSを迎えたシーケンスのlenght norm値はそこで打ち止め
             log_probs_norm = log_probs / length_norm(l)  # apply length normalization with current length l
             # eval end
 
