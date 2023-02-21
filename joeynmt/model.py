@@ -323,7 +323,7 @@ class Model(nn.Module):
             )
 
         # decode tokens with soft beam search
-        # TODO インデックスがmax_output_length - 1で良いのか確かめる
+        # TODO 森村さん確認終わったら max_output_length - 1 -> max_output_length に差し替える
         for l in range(1, max_output_length - 1):
             # eval start
             previous_words = ys_tokens[:, -1].view(-1, 1) if hasattr(self.decoder,'_init_hidden') else ys_tokens
@@ -351,8 +351,6 @@ class Model(nn.Module):
 
             # re-initialize finished
             finished = initial_finished()
-            # re-initialize maximum size exceeded
-            exceeded = False
 
             # adoption start
             # compute adoption probability of token in behavioral policy
@@ -367,6 +365,8 @@ class Model(nn.Module):
             adopted_indexes = filtered_indexes[:, 0]
             if (adoption_size := adopted_indexes.size(0)) == 0:
                 break
+            # initialize maximum size exceeded
+            exceeded = False
             if adoption_size > batch_size * max_adoption_size:
                 exceeded = True
                 log.warning(f'Adopted token set size {adoption_size} exceeds {batch_size=} * {max_adoption_size=}')
