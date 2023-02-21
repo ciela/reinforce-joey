@@ -351,6 +351,8 @@ class Model(nn.Module):
 
             # re-initialize finished
             finished = initial_finished()
+            # re-initialize maximum size exceeded
+            exceeded = False
 
             # adoption start
             # compute adoption probability of token in behavioral policy
@@ -363,11 +365,12 @@ class Model(nn.Module):
             # filter adopted indexes and tokens
             filtered_indexes = to_adopt.nonzero()
             adopted_indexes = filtered_indexes[:, 0]
-            if adopted_indexes.size(0) == 0:
+            if (adoption_size := adopted_indexes.size(0)) == 0:
                 break
-            if adopted_indexes.size(0) > batch_size * max_adoption_size:
-                log.warning(f'Adopted token set size {adopted_indexes.size(0)} exceeds {batch_size=} * {max_adoption_size=}')
-                resampled = torch.randperm(adopted_indexes.size(0))[:batch_size * max_adoption_size]
+            if adoption_size > batch_size * max_adoption_size:
+                exceeded = True
+                log.warning(f'Adopted token set size {adoption_size} exceeds {batch_size=} * {max_adoption_size=}')
+                resampled = torch.randperm(adoption_size)[:batch_size * max_adoption_size]
                 filtered_indexes = filtered_indexes[resampled.sort().values]
                 adopted_indexes = filtered_indexes[:, 0]
                 to_adopt[:, :] = False
@@ -385,8 +388,10 @@ class Model(nn.Module):
             # add adoption scores to increased previous scores
             ys_scores = prev_ys_scores + next_ys_scores
             # multiply importance weights to increased previsous iws
-            # TODO if overed maximum size, then use |H|/max_adoption_size
-            ys_iws = prev_ys_iws * next_ys_iws.unsqueeze(1)
+            if exceeded:
+                ys_iws = prev_ys_iws * adoption_size / max_adoption_size
+            else:
+                ys_iws = prev_ys_iws * next_ys_iws.unsqueeze(1)
             # update other adopted tensors for next decoder I/O
             thresholds = thresholds.index_select(0, adopted_indexes)
             encoder_output = encoder_output.index_select(0, adopted_indexes)
