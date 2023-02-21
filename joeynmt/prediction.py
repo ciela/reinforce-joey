@@ -101,7 +101,7 @@ def validate_on_data(model: Model, data: Dataset,
     log_probabilities = config["training"]["reinforcement_learning"].get("log_probabilities", False)
     pickle_logs = config["training"]["reinforcement_learning"].get("pickle_logs", False)
     topk = config["training"]["reinforcement_learning"].get("topk", 20)
-    max_adoption_size = config["training"]["reinforcement_learning"].get("max_adoption_size", 100)
+    max_adoption_size = config["training"]["reinforcement_learning"]["hyperparameters"].get("max_adoption_size", 100)
 
     model.eval()
     # don't track gradients during validation
