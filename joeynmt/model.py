@@ -355,10 +355,14 @@ class Model(nn.Module):
             # adoption start
             # compute adoption probability of token in behavioral policy
             adoption_prob = adoption_model(log_probs_norm, (thresholds[:, l] - tau_op).unsqueeze(1))  # (batch_size, token_size)
-            # TODO beam_sets[l]のサイズがデータによって変わる？
-            # [batch_size, beam_size, seq] or [batch_size, 1, seq]?
-            # 後者のようにビーム全て取得するようであれば squeeze(1) できない
-            adoption_prob[:, beam_sets[l].squeeze(1)[:, l].unique()] = 1.
+            # select targets to be prob 1.
+            beam_l = beam_sets[l][:, :, -1]  # find last token for all batch and beam
+            prob_one_idx = torch.tensor([
+                [i, v]
+                for i in range(beam_l.size(0))
+                for v in beam_l[i].unique()
+            ]).T  # don't want to use loops..
+            adoption_prob[prob_one_idx[0], prob_one_idx[1]] = 1.
             to_adopt = adoption_prob >= uniform_dist.sample(adoption_prob.size()).squeeze(-1)  # (batch_size, token_size)
             # filter adopted indexes and tokens
             filtered_indexes = to_adopt.nonzero()
@@ -394,6 +398,9 @@ class Model(nn.Module):
                 ys_iws = prev_ys_iws * next_ys_iws.unsqueeze(1)
             # update other adopted tensors for next decoder I/O
             thresholds = thresholds.index_select(0, adopted_indexes)
+            for idx in range(l + 1, max_output_length - 1):
+                # huge memory allocation concerns...
+                beam_sets[idx] = beam_sets[idx].index_select(0, adopted_indexes)
             encoder_output = encoder_output.index_select(0, adopted_indexes)
             src_mask = src_mask.index_select(0, adopted_indexes)
             log_probs = log_probs.index_select(0, adopted_indexes)
