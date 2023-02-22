@@ -370,9 +370,7 @@ class Model(nn.Module):
             if (adoption_size := adopted_indexes.size(0)) == 0:
                 break
             # initialize maximum size exceeded
-            exceeded = False
-            if adoption_size > batch_size * max_adoption_size:
-                exceeded = True
+            if exceeded := adoption_size > batch_size * max_adoption_size:
                 log.warning(f'Adopted token set size {adoption_size} exceeds {batch_size=} * {max_adoption_size=}')
                 resampled = torch.randperm(adoption_size)[:batch_size * max_adoption_size]
                 filtered_indexes = filtered_indexes[resampled.sort().values]
