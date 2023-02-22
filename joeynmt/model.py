@@ -391,7 +391,7 @@ class Model(nn.Module):
             ys_scores = prev_ys_scores + next_ys_scores
             # multiply importance weights to increased previsous iws
             if exceeded:
-                ys_iws = prev_ys_iws * adoption_size / max_adoption_size
+                ys_iws = prev_ys_iws * adoption_size / (batch_size * max_adoption_size)
             else:
                 ys_iws = prev_ys_iws * next_ys_iws.unsqueeze(1)
             # update other adopted tensors for next decoder I/O
@@ -420,8 +420,7 @@ class Model(nn.Module):
         predicted_strings = [join_strings(wordlist) for wordlist in predicted_output]
         gold_strings = [join_strings(wordlist) for wordlist in gold_output]
         # get reinforce loss
-        # TODO pass iws with score (like reinforce * score * iw)
-        batch_loss, rewards, old_bleus = self.loss_function(predicted_strings, gold_strings,  ys_scores)
+        batch_loss, rewards, old_bleus = self.loss_function(predicted_strings, gold_strings, ys_scores * ys_iws)
         return (batch_loss, log_peakiness(self.pad_index, self.trg_vocab, topk, distributions,
         trg, batch_size, max_output_length, gold_strings, predicted_strings, rewards, old_bleus)) \
         if log_probabilities else (batch_loss, [])
