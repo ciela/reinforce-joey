@@ -751,6 +751,12 @@ class Model(nn.Module):
             runnerup_finished = aug_beam_finished[:, -1]  # (batch_size)
             runnerup_seq = aug_beam_seq[:, -1, :]         # (batch_size, step+1)
 
+            # backup beam_seq
+            beam_seq_of_all_steps[step] = beam_seq
+            
+            # reshape `beam_seq` to its original size
+            beam_seq = beam_seq.reshape(batch_size * beam_size, step+1)  # (batch_size*beam_size, hyp_len)
+
             # compute the flag whether the all beam is finished
             are_all_beam_finished_new = beam_finished.all(dim=-1)  # (batch_size)
 
@@ -798,15 +804,9 @@ class Model(nn.Module):
                         alive_seq = torch.vstack([alive_seq, seq])
                         alive_index_old += 1
 
-                # backup beam_seq
-                beam_seq_of_all_steps[step] = beam_seq
-
             else:
                 # calc threshold (Since this is the final step, there is no need for `alive_*` anymore.)
                 thresholds[:, step] = beam_score[:,(n_best-1):(n_best+1)].mean(dim=-1)
-
-            # reshape `beam_seq` to its original size
-            beam_seq = beam_seq.reshape(batch_size * beam_size, step+1)  # (batch_size*beam_size, hyp_len)
 
             are_all_beam_finished = are_all_beam_finished_new
 
