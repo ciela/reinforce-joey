@@ -315,6 +315,7 @@ class Model(nn.Module):
         attention_vectors = None
         finished = initial_finished()
         length_norms = encoder_output.new_zeros([batch_size, 1])
+        alive_batches = torch.arange(batch_size, device=dev)
 
         # run beam search and get thresholds
         with torch.no_grad():
@@ -391,10 +392,11 @@ class Model(nn.Module):
             else:
                 ys_iws = prev_ys_iws * next_ys_iws.unsqueeze(1)
             # update other adopted tensors for next decoder I/O
+            alive_batches = alive_batches.index_select(0, adopted_indexes)
+            if (next_l := l + 1) != max_output_length:
+                beam_sets[next_l] = beam_sets[next_l].index_select(0, alive_batches)
+            beam_sets[l] = None
             thresholds = thresholds.index_select(0, adopted_indexes)
-            for idx in range(l + 1, max_output_length):
-                # huge memory allocation concerns...
-                beam_sets[idx] = beam_sets[idx].index_select(0, adopted_indexes)
             encoder_output = encoder_output.index_select(0, adopted_indexes)
             src_mask = src_mask.index_select(0, adopted_indexes)
             log_probs = log_probs.index_select(0, adopted_indexes)
