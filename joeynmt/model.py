@@ -349,9 +349,6 @@ class Model(nn.Module):
             log_probs_norm = log_probs / length_norms
             # eval end
 
-            # re-initialize finished
-            finished = initial_finished()
-
             # adoption start
             # compute adoption probability of token in behavioral policy
             adoption_prob = adoption_model(log_probs_norm, (thresholds[:, l] - tau_op).unsqueeze(1))  # (batch_size, token_size)
@@ -409,6 +406,8 @@ class Model(nn.Module):
 
             # update finished if exists
             pre_finished = (next_ys_tokens == self.eos_index).nonzero()[:, 0]
+            # re-initialize finished
+            finished = initial_finished()
             if pre_finished.size(0) > 0:
                 finished = pre_finished
 
@@ -753,7 +752,7 @@ class Model(nn.Module):
 
             # backup beam_seq
             beam_seq_of_all_steps[step] = beam_seq
-            
+
             # reshape `beam_seq` to its original size
             beam_seq = beam_seq.reshape(batch_size * beam_size, step+1)  # (batch_size*beam_size, hyp_len)
 
