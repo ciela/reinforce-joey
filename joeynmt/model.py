@@ -323,8 +323,7 @@ class Model(nn.Module):
             )
 
         # decode tokens with soft beam search
-        # TODO 森村さん確認終わったら max_output_length - 1 -> max_output_length に差し替える
-        for l in range(1, max_output_length - 1):
+        for l in range(1, max_output_length):
             # eval start
             previous_words = ys_tokens[:, -1].view(-1, 1) if hasattr(self.decoder,'_init_hidden') else ys_tokens
             logits, hidden, _, attention_vectors = self.decoder(
@@ -393,7 +392,7 @@ class Model(nn.Module):
                 ys_iws = prev_ys_iws * next_ys_iws.unsqueeze(1)
             # update other adopted tensors for next decoder I/O
             thresholds = thresholds.index_select(0, adopted_indexes)
-            for idx in range(l + 1, max_output_length - 1):
+            for idx in range(l + 1, max_output_length):
                 # huge memory allocation concerns...
                 beam_sets[idx] = beam_sets[idx].index_select(0, adopted_indexes)
             encoder_output = encoder_output.index_select(0, adopted_indexes)
