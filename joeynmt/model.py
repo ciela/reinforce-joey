@@ -307,7 +307,6 @@ class Model(nn.Module):
         ys_scores = encoder_output.new_zeros([batch_size, 1])
         ys_iws = encoder_output.new_ones([batch_size, 1])
         trg_mask = src_mask.new_ones([1, 1, 1])
-        distributions = []
         log_probs = 0
         # init hidden state in case of using rnn decoder
         hidden = self.decoder._init_hidden(encoder_hidden) \
@@ -353,7 +352,7 @@ class Model(nn.Module):
             # compute adoption probability of token in behavioral policy
             adoption_prob = adoption_model(log_probs_norm, (thresholds[:, l] - tau_op).unsqueeze(1))  # (batch_size, token_size)
             # select targets to be prob 1.
-            beam_l = beam_sets[l][:, :, -1]  # find last token for all batch and beam
+            beam_l = beam_sets[1][:, :, -1]  # find last token for all batch and beam
             prob_one_idx = torch.tensor([
                 [i, v]
                 for i in range(beam_l.size(0))
@@ -367,8 +366,10 @@ class Model(nn.Module):
             if (adoption_size := adopted_indexes.size(0)) == 0:
                 break
             # initialize maximum size exceeded
-            if exceeded := adoption_size > batch_size * max_adoption_size:
-                log.warning(f'Adopted token set size {adoption_size} exceeds {batch_size=} * {max_adoption_size=}')
+            exceeded = adoption_size > batch_size * max_adoption_size
+            log.info(f'{l=:02d}: Adopted token set size {adoption_size}')
+            if exceeded:
+                log.warning(f'{l=:02d}: Adopted token set size {adoption_size} exceeds {batch_size=} * {max_adoption_size=}')
                 resampled = torch.randperm(adoption_size)[:batch_size * max_adoption_size]
                 filtered_indexes = filtered_indexes[resampled.sort().values]
                 adopted_indexes = filtered_indexes[:, 0]
@@ -393,16 +394,15 @@ class Model(nn.Module):
                 ys_iws = prev_ys_iws * next_ys_iws.unsqueeze(1)
             # update other adopted tensors for next decoder I/O
             alive_batches = alive_batches.index_select(0, adopted_indexes)
-            if (next_l := l + 1) != max_output_length:
-                beam_sets[next_l] = beam_sets[next_l].index_select(0, alive_batches)
-            beam_sets[l] = None
+            if len(beam_sets) > 2:
+                beam_sets[2] = beam_sets[2].index_select(0, alive_batches)
+            del beam_sets[1]
             thresholds = thresholds.index_select(0, adopted_indexes)
             encoder_output = encoder_output.index_select(0, adopted_indexes)
             src_mask = src_mask.index_select(0, adopted_indexes)
             log_probs = log_probs.index_select(0, adopted_indexes)
             trg = trg.index_select(0, adopted_indexes)
             length_norms = length_norms.index_select(0, adopted_indexes)
-            distributions.append(Categorical(logits=logits.index_select(0, adopted_indexes)))
             # adoption end
 
             # update finished if exists
@@ -421,7 +421,7 @@ class Model(nn.Module):
         gold_strings = [join_strings(wordlist) for wordlist in gold_output]
         # get reinforce loss
         batch_loss, rewards, old_bleus = self.loss_function(predicted_strings, gold_strings, ys_scores * ys_iws)
-        return (batch_loss, log_peakiness(self.pad_index, self.trg_vocab, topk, distributions,
+        return (batch_loss, log_peakiness(self.pad_index, self.trg_vocab, topk, _,
         trg, batch_size, max_output_length, gold_strings, predicted_strings, rewards, old_bleus)) \
         if log_probabilities else (batch_loss, [])
 
