@@ -959,6 +959,7 @@ class TransformerDecoder(Decoder):
             output = output_merged\
                 .index_add(0, unfinished, output)\
                 .index_add(0, finished, output_finished)
+            del output_finished, output_merged
 
         return output, x, None, None
 

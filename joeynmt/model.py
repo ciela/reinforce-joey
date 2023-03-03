@@ -291,9 +291,6 @@ class Model(nn.Module):
             validate_args=False,
         )
 
-        def initial_finished() -> Tensor:
-            return src_mask.new_zeros([0], dtype=torch.long)
-
         def adoption_model(log_prob: Tensor, tau: Tensor) -> Tensor:
             return 1 - gumbel_dist.cdf(-(log_prob - tau))
 
@@ -312,7 +309,8 @@ class Model(nn.Module):
         hidden = self.decoder._init_hidden(encoder_hidden) \
             if hasattr(self.decoder,'_init_hidden') else 0
         attention_vectors = None
-        finished = initial_finished()
+        finished = src_mask.new_zeros([0], dtype=torch.long)
+        initial_finished = src_mask.new_zeros([0], dtype=torch.long)
         length_norms = encoder_output.new_zeros([batch_size, 1])
         alive_batches = torch.arange(batch_size, device=dev)
 
@@ -408,7 +406,7 @@ class Model(nn.Module):
             # update finished if exists
             pre_finished = (next_ys_tokens == self.eos_index).nonzero()[:, 0]
             # re-initialize finished
-            finished = initial_finished()
+            finished = initial_finished
             if pre_finished.size(0) > 0:
                 finished = pre_finished
 
