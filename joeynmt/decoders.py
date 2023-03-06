@@ -915,7 +915,7 @@ class TransformerDecoder(Decoder):
             # if all finished, return fixed outputs
             if fin_size == trg_embed.size(0):
                 output_finished = trg_embed.new_full(
-                    (fin_size, trg_embed.size(1), self._output_size),
+                    (fin_size, 1, self._output_size),
                     float('-inf'), dtype=torch.float,
                 )
                 output_finished[:, :, eos_index] = 0.
@@ -948,16 +948,16 @@ class TransformerDecoder(Decoder):
         # finally, concatenate finished and unfinshed outputs
         if not_using_finished:
             output_finished = output.new_full(
-                (fin_size, output.size(1), output.size(2)),
+                (fin_size, 1, output.size(2)),
                 float('-inf'), dtype=torch.float,
             )
             output_finished[:, :, eos_index] = 0.
             # merge two outputs
             output_merged = output.new_zeros(
-                (fin_size + unfin_size, output.size(1), output.size(2))
+                (fin_size + unfin_size, 1, output.size(2))
             )
             output = output_merged\
-                .index_add(0, unfinished, output)\
+                .index_add(0, unfinished, output[:, -1, :].unsqueeze(1))\
                 .index_add(0, finished, output_finished)
             del output_finished, output_merged
 
