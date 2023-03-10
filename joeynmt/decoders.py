@@ -949,12 +949,12 @@ class TransformerDecoder(Decoder):
         if not_using_finished:
             output_finished = output.new_full(
                 (fin_size, 1, output.size(2)),
-                float('-inf'), dtype=torch.float,
+                float('-inf'), dtype=output.dtype,
             )
             output_finished[:, :, eos_index] = 0.
             # merge two outputs
             output_merged = output.new_zeros(
-                (fin_size + unfin_size, 1, output.size(2))
+                (fin_size + unfin_size, 1, output.size(2)), dtype=output.dtype,
             )
             output = output_merged\
                 .index_add(0, unfinished, output[:, -1, :].unsqueeze(1))\
