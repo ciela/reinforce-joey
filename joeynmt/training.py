@@ -87,6 +87,7 @@ class TrainManager:
         self.max_adoption_size = train_config["reinforcement_learning"]["hyperparameters"].get("max_adoption_size", 100)
         self.gumbel_loc = train_config["reinforcement_learning"]["hyperparameters"].get("gumbel_loc", 0.0)
         self.gumbel_scale = train_config["reinforcement_learning"]["hyperparameters"].get("gumbel_scale", 1.0)
+        self.tau_op = train_config["reinforcement_learning"]["hyperparameters"].get("tau_op", 0.5)
 
         if self.log_probabilities:
             self.entropy_logger = make_retro_logger("{}/entropy.log".format(self.model_dir), "entropy_logger")
@@ -403,13 +404,14 @@ class TrainManager:
             "\tgradient accumulation: %d\n"
             "\tbatch size per device: %d\n"
             "\ttotal batch size (w. parallel & accumulation): %d\n"
-            "\tmaximum adoption set size: %d"
-            "\tgumbel location: %f"
-            "\tgumbel scale: %f",
+            "\tmaximum adoption set size: %d\n"
+            "\tgumbel location: %.3f\n"
+            "\tgumbel scale: %.3f\n"
+            "\ttau op: %.3f\n",
             self.device, self.n_gpu, self.fp16, self.batch_multiplier,
             self.batch_size//self.n_gpu if self.n_gpu > 1 else self.batch_size,
             self.batch_size * self.batch_multiplier,
-            self.max_adoption_size, self.gumbel_loc, self.gumbel_scale)
+            self.max_adoption_size, self.gumbel_loc, self.gumbel_scale, self.tau_op)
 
         for epoch_no in range(self.epochs):
             logger.info("EPOCH %d", epoch_no + 1)
@@ -541,7 +543,10 @@ class TrainManager:
             log_probabilities=self.log_probabilities,
             pickle_logs=self.pickle_logs,
             max_adoption_size=self.max_adoption_size,
-            beam_size=self.beam_size)
+            beam_size=self.beam_size,
+            gumbel_loc=self.gumbel_loc,
+            gumbel_scale=self.gumbel_scale,
+            tau_op=self.tau_op)
 
             if self.method == "a2c":
                 losses = batch_loss

@@ -101,7 +101,7 @@ def validate_on_data(model: Model, data: Dataset,
     log_probabilities = config["training"]["reinforcement_learning"].get("log_probabilities", False)
     pickle_logs = config["training"]["reinforcement_learning"].get("pickle_logs", False)
     topk = config["training"]["reinforcement_learning"].get("topk", 20)
-    max_adoption_size = config["training"]["reinforcement_learning"].get("max_adoption_size", 100)
+    max_adoption_size = config["training"]["reinforcement_learning"]["hyperparameters"].get("max_adoption_size", 100)
 
     model.eval()
     # don't track gradients during validation
@@ -125,7 +125,7 @@ def validate_on_data(model: Model, data: Dataset,
             if compute_loss and batch.trg is not None:
                 if reinforcement_learning:
                     batch_loss, distribution, _, _ = model(
-                        return_type=method, max_output_length=max_output_length,
+                        return_type="reinforce" if method == "sbs" else method, max_output_length=max_output_length,
                         src=batch.src, trg=batch.trg,
                         trg_input=batch.trg_input, src_mask=batch.src_mask,
                         src_length=batch.src_length, trg_mask=batch.trg_mask,
