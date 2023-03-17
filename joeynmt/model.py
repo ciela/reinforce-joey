@@ -350,13 +350,20 @@ class Model(nn.Module):
             # compute adoption probability of token in behavioral policy
             adoption_prob = adoption_model(log_probs_norm, (thresholds[:, l] - tau_op).unsqueeze(1))  # (batch_size, token_size)
             # select targets to be prob 1.
-            beam_l = beam_sets[1][:, :, -1]  # find last token for all batch and beam
+            beam_l = beam_sets[1]
             prob_one_idx = torch.tensor([
-                [i, v]
-                for i in range(beam_l.size(0))
-                for v in beam_l[i].unique()
+                [abi, beam[-1]]
+                for batch_i, batch_beams in enumerate(beam_l)
+                for beam in batch_beams
+                for abi, token in zip(
+                    (alive_batches == batch_i).nonzero(),
+                    ys_tokens[(alive_batches == batch_i).nonzero()],
+                )
+                if (beam[:-1] == token.squeeze(0)).all()
             ]).T  # don't want to use loops..
-            adoption_prob[prob_one_idx[0], prob_one_idx[1]] = 1.
+            if prob_one_idx.size(0) > 0:
+                assert prob_one_idx.size(1) <= batch_size * beam_size, f"Illegal `prob_one_idx` size: {prob_one_idx.size(1)}"
+                adoption_prob[prob_one_idx[0], prob_one_idx[1]] = 1.
             to_adopt = adoption_prob >= uniform_dist.sample(adoption_prob.size()).squeeze(-1)  # (batch_size, token_size)
             # filter adopted indexes and tokens
             filtered_indexes = to_adopt.nonzero()
@@ -393,7 +400,7 @@ class Model(nn.Module):
             # update other adopted tensors for next decoder I/O
             alive_batches = alive_batches.index_select(0, adopted_indexes)
             if len(beam_sets) > 2:
-                beam_sets[2] = beam_sets[2].index_select(0, alive_batches)
+                beam_sets[2] = beam_sets[2].index_select(0, alive_batches.unique())
             del beam_sets[1]
             thresholds = thresholds.index_select(0, adopted_indexes)
             encoder_output = encoder_output.index_select(0, adopted_indexes)
