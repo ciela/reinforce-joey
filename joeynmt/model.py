@@ -432,7 +432,8 @@ class Model(nn.Module):
 
     def soft_beam_policy_on(self, max_output_length, src: Tensor, trg: Tensor, src_mask: Tensor,
             src_length: Tensor, temperature: float, topk: int, log_probabilities: False, pickle_logs:False,
-            alpha: float = 1., gumbel_scale: float = 1., max_adoption_size: int = 100, beam_size: int = 5):
+            alpha: float = 1., max_adoption_size: int = 100, beam_size: int = 5,
+            gumbel_loc: float = 0., gumbel_scale: float = 1., tau_op: float = None):
         """ Computes forward pass for Soft Beam Search
 
         Encodes source, then step by step decodes and samples token from output distribution.
@@ -447,8 +448,10 @@ class Model(nn.Module):
         :param topk: consider top-k parameters for logging
         :param log_probabilities: log probabilities
         :param alpha: length normalization controller
+        :param gumbel_loc: loc parameter of gumbel distribution
         :param gumbel_scale: scale parameter of gumbel distribution
         :param max_adoption_size: maximum size of adoption set size
+        :param tau_op: a dummy parameter
         :return: loss, logs
         """
         dev = src.device
@@ -457,13 +460,10 @@ class Model(nn.Module):
             high=torch.tensor([1.], device=dev),
         )
         gumbel_dist = Gumbel(
-            torch.tensor([0.], device=dev),
+            torch.tensor([gumbel_loc], device=dev),
             torch.tensor([gumbel_scale], device=dev),
             validate_args=False,
         )
-
-        def initial_finished() -> Tensor:
-            return src_mask.new_zeros([0], dtype=torch.long)
 
         def adoption_model(log_prob: Tensor, tau: Tensor) -> Tensor:
             return 1 - gumbel_dist.cdf(-(log_prob - tau))
@@ -483,7 +483,8 @@ class Model(nn.Module):
         hidden = self.decoder._init_hidden(encoder_hidden) \
             if hasattr(self.decoder,'_init_hidden') else 0
         attention_vectors = None
-        finished = initial_finished()
+        finished = src_mask.new_zeros([0], dtype=torch.long)
+        initial_finished = src_mask.new_zeros([0], dtype=torch.long)
         length_norms = encoder_output.new_zeros([batch_size, 1])
 
         # run beam search and get thresholds
@@ -518,9 +519,6 @@ class Model(nn.Module):
             log_probs_norm = log_probs / length_norms
             # eval end
 
-            # re-initialize finished
-            finished = initial_finished()
-
             # adopion start
             score = adoption_model(log_probs_norm, thresholds[:, l].unsqueeze(1))  # (batch_size, token_size)
             to_adopt = score >= uniform_dist.sample(score.size()).squeeze(-1)  # (batch_size, token_size)
@@ -552,6 +550,8 @@ class Model(nn.Module):
 
             # update finished if exists
             pre_finished = (next_ys_tokens == self.eos_index).nonzero()[:, 0]
+            # re-initialize finished
+            finished = initial_finished
             if pre_finished.size(0) > 0:
                 finished = pre_finished
 
@@ -1011,7 +1011,7 @@ class Model(nn.Module):
             return_tuple = (loss, logging, None, None)
 
         elif return_type == "sbs":
-            loss, logging = self.soft_beam_policy(
+            loss, logging = self.soft_beam_policy_on(
             src=kwargs["src"],
             trg=kwargs["trg"],
             src_mask=kwargs["src_mask"],
