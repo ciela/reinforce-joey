@@ -893,7 +893,7 @@ def vanilla_beam_search(model: Model, beam_size: int,
         encoder_output = encoder_output.index_select(0, select_indices)
         src_mask = src_mask.index_select(0, select_indices)
 
-        # update previous length prenalty with current one
+        # update previous length penalty with current one
         length_penalty_prev = length_penalty
 
     def pad_and_stack_hyps(hyps, pad_value):
