@@ -815,6 +815,9 @@ class Model(nn.Module):
 
             are_all_beam_finished = are_all_beam_finished_new
 
+            # update previous length penalty with current one
+            length_penalty_prev = length_penalty
+
         return thresholds, beam_seq_of_all_steps
 
     def ned_a2c(self, max_output_length, src: Tensor, trg: Tensor, src_mask: Tensor,
