@@ -63,6 +63,7 @@ training:
       gumbel_loc: 0.0
       gumbel_scale: 1.0
       tau_op: 0.5
+      sbp: "off"
 
 model:
   initializer: "xavier"

@@ -256,7 +256,7 @@ class Model(nn.Module):
                 Qs_to_return, rewards, mrt=True, samples=samples)) \
                 if log_probabilities else (batch_loss, [])
 
-    def soft_beam_policy(self, max_output_length, src: Tensor, trg: Tensor, src_mask: Tensor,
+    def soft_beam_policy_off(self, max_output_length, src: Tensor, trg: Tensor, src_mask: Tensor,
             src_length: Tensor, temperature: float, topk: int, log_probabilities: False, pickle_logs:False,
             alpha: float = 1., max_adoption_size: int = 100, beam_size: int = 5,
             gumbel_loc: float = 0., gumbel_scale: float = 1., tau_op: float = 0.5):

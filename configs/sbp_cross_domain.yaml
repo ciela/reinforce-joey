@@ -60,6 +60,10 @@ training:
       samples: 5
       max_adoption_size: 100
       baseline: "average_reward_baseline"
+      gumbel_loc: 0.0
+      gumbel_scale: 1.0
+      tau_op: 0.5
+      sbp: "off"
 
 model:
   initializer: "xavier"
