@@ -1,4 +1,4 @@
-name: "sbs-cross-domain"
+name: "sbp-cross-domain"
 
 data:
   src: "de"
@@ -40,7 +40,7 @@ training:
   logging_freq: 500
   track_peakiness_freq: 500
   eval_metric: "bleu"
-  model_dir: "models/sbs_cross_domain"
+  model_dir: "models/sbp_cross_domain"
   overwrite: True
   shuffle: True
   use_cuda: True
@@ -50,7 +50,7 @@ training:
 
   reinforcement_learning:
     use_reinforcement_learning: True
-    method: "sbs"
+    method: "sbp"
     log_probabilities: False
     topk: 100
     hyperparameters:

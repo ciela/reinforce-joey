@@ -1013,7 +1013,7 @@ class Model(nn.Module):
             )
             return_tuple = (loss, logging, None, None)
 
-        elif return_type == "sbs":
+        elif return_type == "sbp":
             loss, logging = self.soft_beam_policy_on(
             src=kwargs["src"],
             trg=kwargs["trg"],
