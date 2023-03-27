@@ -1014,7 +1014,8 @@ class Model(nn.Module):
             return_tuple = (loss, logging, None, None)
 
         elif return_type == "sbp":
-            loss, logging = self.soft_beam_policy_on(
+            policy = self.soft_beam_policy_on if kwargs["sbp_policy"] == "on" else self.soft_beam_policy_off
+            loss, logging = policy(
             src=kwargs["src"],
             trg=kwargs["trg"],
             src_mask=kwargs["src_mask"],
