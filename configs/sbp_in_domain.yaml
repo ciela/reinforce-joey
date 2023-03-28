@@ -1,4 +1,4 @@
-name: "sbs-in-domain"
+name: "sbp-in-domain"
 
 data:
   src: "de"
@@ -40,7 +40,7 @@ training:
   logging_freq: 500
   track_peakiness_freq: 500
   eval_metric: "bleu"
-  model_dir: "models/sbs_in_domain"
+  model_dir: "models/sbp_in_domain"
   overwrite: True
   shuffle: True
   use_cuda: True
@@ -50,7 +50,7 @@ training:
 
   reinforcement_learning:
     use_reinforcement_learning: True
-    method: "sbs"
+    method: "sbp"
     log_probabilities: False
     topk: 100
     hyperparameters:
@@ -63,6 +63,7 @@ training:
       gumbel_loc: 0.0
       gumbel_scale: 1.0
       tau_op: 0.5
+      sbp_policy: "off"
 
 model:
   initializer: "xavier"
