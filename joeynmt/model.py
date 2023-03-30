@@ -586,6 +586,9 @@ class Model(nn.Module):
             - thresholds: torch.tensor (max_output_length),
             - beam_seq_of_all_steps: [beam_seq(step=0), ..., beam_seq(step=max_output_length-1)]
         """
+        # don't use dropouts during beam search
+        self.decoder.eval()
+
         assert beam_size > 0, 'Beam size must be >0.'
         if n_best is None:
             n_best = beam_size
@@ -817,6 +820,9 @@ class Model(nn.Module):
 
             # update previous length penalty with current one
             length_penalty_prev = length_penalty
+
+        # reset decoder's status to training
+        self.decoder.train()
 
         return thresholds, beam_seq_of_all_steps
 
