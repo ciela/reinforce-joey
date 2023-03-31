@@ -317,7 +317,7 @@ class Model(nn.Module):
         # run beam search and get thresholds
         with torch.no_grad():
             thresholds, beam_sets = self._compute_threshold_by_vanilla_beam_search(
-                beam_size, encoder_output, encoder_hidden, src_mask, max_output_length, alpha
+                beam_size, encoder_output, encoder_hidden, src_mask, temperature, max_output_length, alpha
             )
 
         # decode tokens with soft beam search
@@ -570,7 +570,7 @@ class Model(nn.Module):
 
     def _compute_threshold_by_vanilla_beam_search(self, beam_size: int,
                                                 encoder_output: Tensor, encoder_hidden: Tensor,
-                                                src_mask: Tensor, max_output_length: int,
+                                                src_mask: Tensor, temperature: float, max_output_length: int,
                                                 alpha: float, n_best: int = None) -> (np.array, np.array):
         """
         Compute thresholds for soft beam policy based on vanilla_beam_search with size k.
@@ -579,6 +579,7 @@ class Model(nn.Module):
         :param encoder_output:
         :param encoder_hidden:
         :param src_mask:
+        :param temperature: softmax temperature
         :param max_output_length:
         :param alpha: `alpha` factor for length penalty
         :param n_best: return this many hypotheses, <= beam
@@ -684,7 +685,7 @@ class Model(nn.Module):
 
             # For the Transformer we made predictions for all time steps up to
             # this point, so we only want to know about the last time step.
-            logits = logits[:, -1]  # (batch_size * beam_size + finished_batch_size, trg_vocab_size)
+            logits = logits[:, -1] / temperature  # (batch_size * beam_size + finished_batch_size, trg_vocab_size)
 
             # compute log probability over trg vocab given a previous sequence
             log_probs = F.log_softmax(logits, dim=-1).squeeze(1)  # (batch_size * beam_size + finished_batch_size, trg_vocab_size)
