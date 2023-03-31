@@ -338,7 +338,7 @@ class Model(nn.Module):
             )
             logits = logits[:, -1] / temperature
             # sampling probability of pg
-            log_probs += torch.log_softmax(logits, dim=1)
+            log_probs = log_probs + torch.log_softmax(logits, dim=1)
             # find length normalization mask (True for not EOSed sequence)
             ln_mask = ~(logits[:, self.eos_index] == 0).unsqueeze(1)
             # apply length normalization with current length l
@@ -405,7 +405,7 @@ class Model(nn.Module):
             thresholds = thresholds.index_select(0, adopted_indexes)
             encoder_output = encoder_output.index_select(0, adopted_indexes)
             src_mask = src_mask.index_select(0, adopted_indexes)
-            log_probs = log_probs.index_select(0, adopted_indexes)
+            log_probs = log_probs[to_adopt].unsqueeze(dim=1)
             trg = trg.index_select(0, adopted_indexes)
             length_norms = length_norms.index_select(0, adopted_indexes)
             # adoption end
@@ -511,7 +511,7 @@ class Model(nn.Module):
             )
             logits = logits[:, -1] / temperature
             # sampling probability of pg
-            log_probs += torch.log_softmax(logits, dim=1)
+            log_probs = log_probs + torch.log_softmax(logits, dim=1)
             # find length normalization mask (True for not EOSed sequence)
             ln_mask = ~(logits[:, self.eos_index] == 0).unsqueeze(1)
             # apply length normalization with current length l
@@ -542,7 +542,7 @@ class Model(nn.Module):
             thresholds = thresholds.index_select(0, adopted_indexes)
             encoder_output = encoder_output.index_select(0, adopted_indexes)
             src_mask = src_mask.index_select(0, adopted_indexes)
-            log_probs = log_probs.index_select(0, adopted_indexes)
+            log_probs = log_probs[to_adopt].unsqueeze(dim=1)
             trg = trg.index_select(0, adopted_indexes)
             length_norms = length_norms.index_select(0, adopted_indexes)
             distributions.append(Categorical(logits=logits.index_select(0, adopted_indexes)))
