@@ -1247,6 +1247,7 @@ class Model(nn.Module):
             src_length=kwargs["src_length"],
             max_output_length=kwargs["max_output_length"],
             temperature=kwargs["temperature"],
+            alpha=kwargs["alpha"],
             topk=kwargs['topk'],
             log_probabilities=kwargs["log_probabilities"],
             pickle_logs=kwargs["pickle_logs"],
