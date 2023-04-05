@@ -492,7 +492,7 @@ class Model(nn.Module):
         with torch.no_grad():
             thresholds, beam_sets = self._compute_threshold_by_vanilla_beam_search(
                 beam_size, encoder_output, encoder_hidden, src_mask, temperature,
-                max_output_length, alpha, margin=gumbel_scale
+                max_output_length, alpha, margin=min(3*gumbel_scale, 1.0)
             )
 
         # decode tokens with soft beam search
