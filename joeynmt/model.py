@@ -317,8 +317,7 @@ class Model(nn.Module):
         # run beam search and get thresholds
         with torch.no_grad():
             thresholds, beam_sets = self._compute_threshold_by_vanilla_beam_search(
-                beam_size, encoder_output, encoder_hidden, src_mask, temperature,
-                max_output_length, alpha, margin=gumbel_scale
+                beam_size, encoder_output, encoder_hidden, src_mask, temperature, alpha
             )
 
         # decode tokens with soft beam search
@@ -491,8 +490,7 @@ class Model(nn.Module):
         # run beam search and get thresholds
         with torch.no_grad():
             thresholds, beam_sets = self._compute_threshold_by_vanilla_beam_search(
-                beam_size, encoder_output, encoder_hidden, src_mask, temperature,
-                max_output_length, alpha, margin=min(3*gumbel_scale, 1.0)
+                beam_size, encoder_output, encoder_hidden, src_mask, temperature, alpha
             )
 
         # decode tokens with soft beam search
@@ -573,8 +571,7 @@ class Model(nn.Module):
 
     def _compute_threshold_by_vanilla_beam_search(self, beam_size: int,
                                                   encoder_output: Tensor, encoder_hidden: Tensor, src_mask: Tensor,
-                                                  temperature: float, max_output_length: int, alpha: float = 1.0,
-                                                  margin: float = 0.5, n_best: int = None) -> (np.array, np.array):
+                                                  temperature: float, alpha: float = 1.0) -> (np.array, np.array):
         """
         Compute thresholds for soft beam policy based on vanilla_beam_search with size k.
 
@@ -583,22 +580,13 @@ class Model(nn.Module):
         :param encoder_hidden:
         :param src_mask:
         :param temperature: softmax temperature
-        :param max_output_length:
         :param alpha: `alpha` factor for length penalty
-        :param margin: target threshold margin from beam sequences
-        :param n_best: return this many hypotheses, <= beam
         :return:
-            - thresholds: torch.tensor (max_output_length),
-            - beam_seq_of_all_steps: [beam_seq(step=0), ..., beam_seq(step=max_output_length-1)]
+            - thresholds: torch.tensor (batch_size, max-length-of-beam-seqs),
+            - beam_seq_of_all_steps: [beam_seq(step=1), ..., beam_seq(step = max-length-of-beam-seqs)]
         """
         # don't use dropouts during beam search
         self.decoder.eval()
-
-        assert beam_size > 0, 'Beam size must be >0.'
-        if n_best is None:
-            n_best = beam_size
-        else:
-            assert n_best <= beam_size, f'Can only return {beam_size} best hypotheses.'
 
         # init
         bos_index = self.bos_index
@@ -637,31 +625,24 @@ class Model(nn.Module):
         # since the only option of the first token is the BOS token.
         beam_score[:, 1:] = float("-inf")
 
-        # keeps flag whether the all beam is finished
-        are_all_beam_finished = torch.full(
-            [batch_size], False, dtype=torch.bool, device=device
-        )  # (batch_size)
-
         # size of finished batch
         finished_batch_size = 0
 
         # keeps threshold of each step
-        thresholds = torch.full(
-            [batch_size, max_output_length], -float('inf'),
-            dtype=torch.float,
-            device=device)  # (batch_size, max_output_length)
+        thresholds = []
 
         # keeps results of each step of beam hypotheses
-        beam_seq_of_all_steps = [[] for _ in range(max_output_length)]  # [beam_seq at step 0, ... , beam_seq at step max_output_length-1]
-        beam_seq_of_all_steps[0] = beam_seq.reshape(batch_size, beam_size, 1)
+        beam_seq_of_all_steps = []
 
         # indicator if each beam seq is finished
         beam_finished = torch.full((batch_size, beam_size),
                                    False,
                                    dtype=torch.bool,
                                    device=device)  # (batch_size, beam_size)
+        step = 0
+        while not beam_finished.all():
+            step += 1
 
-        for step in range(1, max_output_length):
             # This decides which part of the predicted sentence we feed to the decoder to make the next prediction.
             # For Transformer, we feed the complete predicted sentence so far.
             # For Recurrent models, only feed the previous target word prediction
@@ -749,32 +730,13 @@ class Model(nn.Module):
             runnerup_score = aug_beam_score[:, -1]  # (batch_size)
 
             # backup beam_seq
-            beam_seq_of_all_steps[step] = beam_seq
+            beam_seq_of_all_steps.append(beam_seq)
 
             # reshape `beam_seq` to its original size
             beam_seq = beam_seq.reshape(batch_size * beam_size, step + 1)  # (batch_size*beam_size, hyp_len)
 
             # calc thresholds
-            if step < max_output_length - 1 and n_best == beam_size:
-
-                for batch_index in range(batch_size):
-
-                    if not are_all_beam_finished[batch_index]:
-                        thresholds[batch_index, step] = \
-                            torch.max( beam_score[batch_index,-1] - margin,
-                                      (beam_score[batch_index,-1] + runnerup_score[batch_index])/2 )
-                    else:
-                        thresholds[batch_index, step] = \
-                            (thresholds[batch_index,step-1] + beam_score[batch_index,-1]-margin) / 2
-
-            else:
-                # calc threshold (Since this is the final step, there is no need for `alive_*` anymore.)
-                thresholds[:, step] = \
-                    torch.max( beam_score[:,n_best-1] - margin,
-                               beam_score[:,(n_best-1):(n_best+1)].mean(dim=-1) )
-
-            # compute the flag whether the all beam is finished
-            are_all_beam_finished = beam_finished.all(dim=-1)  # (batch_size)
+            thresholds.append(beam_score[:,-1])
 
             # update previous length penalty with current one
             length_penalty_prev = length_penalty
@@ -782,7 +744,7 @@ class Model(nn.Module):
         # reset decoder's status to training
         self.decoder.train()
 
-        return thresholds, beam_seq_of_all_steps
+        return torch.vstack(thresholds).t(), beam_seq_of_all_steps
 
 
     def _compute_threshold_by_vanilla_beam_search_obsolete(self, beam_size: int,
