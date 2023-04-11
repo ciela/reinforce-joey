@@ -910,7 +910,7 @@ class TransformerDecoder(Decoder):
         """
         assert trg_mask is not None, "trg_mask required for Transformer"
 
-        # if there are alredy finished seqs, use unfinished seqs only
+        # if there are already finished seqs, use unfinished seqs only
         if not_using_finished := (finished is not None and (fin_size := finished.size(0)) > 0):
             # if all finished, return fixed outputs
             if fin_size == trg_embed.size(0):
@@ -945,7 +945,7 @@ class TransformerDecoder(Decoder):
         x = self.layer_norm(x)
         output = self.output_layer(x)
 
-        # finally, concatenate finished and unfinshed outputs
+        # finally, concatenate finished and unfinished outputs
         if not_using_finished:
             output_finished = output.new_full(
                 (fin_size, 1, output.size(2)),
