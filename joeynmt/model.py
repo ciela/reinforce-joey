@@ -571,7 +571,8 @@ class Model(nn.Module):
 
     def _compute_threshold_by_vanilla_beam_search(self, beam_size: int,
                                                   encoder_output: Tensor, encoder_hidden: Tensor, src_mask: Tensor,
-                                                  temperature: float, alpha: float = 1.0) -> (np.array, np.array):
+                                                  temperature: float, alpha: float = 1.0,
+                                                  smoothing_window: float = 0.0) -> (np.array, np.array):
         """
         Compute thresholds for soft beam policy based on vanilla_beam_search with size k.
 
@@ -581,10 +582,13 @@ class Model(nn.Module):
         :param src_mask:
         :param temperature: softmax temperature
         :param alpha: `alpha` factor for length penalty
+        :param smoothing_window: smoothing window for stochastic sampling
         :return:
             - thresholds: torch.tensor (batch_size, max-length-of-beam-seqs),
             - beam_seq_of_all_steps: [beam_seq(step=1), ..., beam_seq(step = max-length-of-beam-seqs)]
         """
+        # TODO: implementation of stochastic sequence sampling with "smoothing_window"
+
         # don't use dropouts during beam search
         self.decoder.eval()
 
