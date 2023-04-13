@@ -587,8 +587,9 @@ class Model(nn.Module):
                                  hypotheses with score less than “threshold” but greater than "threshold - smoothing_factor"
                                  is adopted with probability "(threshold - smoothing_factor)/smoothing_factor"
         :return:
-            - thresholds: torch.tensor (batch_size, max-length-of-beam-seqs),
-            - beam_seq_of_all_steps: [beam_seq(step=1), ..., beam_seq(step = max-length-of-beam-seqs)]
+            - threshold_of_all_steps: [torch.tensor(batch=0), ..., torch.tensor(batch=batch_size-1)]
+            - beam_seq_of_all_steps: [beam_seq_of_all_steps[batch=0], ..., beam_seq_of_all_steps[batch=0]]
+            - beam_prob_of_all_steps: [beam_prob_of_all_steps[batch=0], ..., beam_prob_of_all_steps[batch=0]]
         """
         # don't use dropouts during beam search
         self.decoder.eval()
@@ -630,6 +631,9 @@ class Model(nn.Module):
         # since the only option of the first token is the BOS token.
         beam_score[:, 1:] = float("-inf")
 
+        # keeps track of the adoption probs of the beam hypotheses
+        beam_prob = torch.ones(batch_size*beam_size, device=device)
+
         # size of finished batch
         finished_batch_size = 0
 
@@ -638,6 +642,9 @@ class Model(nn.Module):
 
         # keeps beam hypotheses of each step
         beam_seq_of_all_steps = [[] for b in range(batch_size)]
+
+        # keeps adoption probability of beam hypotheses of each step
+        beam_prob_of_all_steps = [[] for b in range(batch_size)]
 
         # indicator if each beam seq is finished
         beam_finished = torch.full((batch_size, beam_size),
@@ -730,14 +737,16 @@ class Model(nn.Module):
                 sorted_beam_vocab_index = sorted_beam_vocab_index[:, adoption_candidate_column]
 
                 # adoption
-                noise = smoothing_factor * uniform_dist.sample([batch_size, sorted_beam_vocab_score.shape[1]]).squeeze(-1)
-                adoption_mask = sorted_beam_vocab_score - noise > 0
+                adoption_prob = (sorted_beam_vocab_score/smoothing_factor).clamp(min=0, max=1)
+                adoption_mask = adoption_prob >= uniform_dist.sample(adoption_prob.shape).squeeze(-1)
                 sorted_beam_vocab_score[~adoption_mask] = -np.inf
 
                 # delete unnecessary columns:  (batch_size, beam_size+a)
-                beam_score = sorted_beam_vocab_score[:, adoption_mask.any(dim=0)]
-                beam_index = sorted_beam_vocab_index[:, adoption_mask.any(dim=0)]
-                adoption_mask = adoption_mask[:, adoption_mask.any(dim=0)]
+                adoption_column = adoption_mask.any(dim=0)
+                beam_score = sorted_beam_vocab_score[:, adoption_column]
+                beam_index = sorted_beam_vocab_index[:, adoption_column]
+                adoption_prob = adoption_prob[:, adoption_column]
+                adoption_mask = adoption_mask[:, adoption_column]
 
                 # restore adjusted score to original score
                 beam_score += - smoothing_factor + threshold.unsqueeze(-1)
@@ -764,9 +773,13 @@ class Model(nn.Module):
 
             # create a list-type variable of 'beam_seq' for output
             if smoothing_factor == 0:
-                beam_seq_list = [beam_seq.reshape(batch_size,beam_size,step+1)[i] for i in range(batch_size)]
+                beam_seq_list = [beam_seq.reshape(batch_size,beam_size,step+1)[b] for b in range(batch_size)]
             else:
-                beam_seq_list = [beam_seq.reshape(batch_size,-1,step+1)[i][adoption_mask[i]] for i in range(batch_size)]
+                beam_seq_list = [beam_seq.reshape(batch_size,-1,step+1)[b][adoption_mask[b]] for b in range(batch_size)]
+
+                # update beam_prob
+                beam_prob = beam_prob[select_index] * adoption_prob.view(-1)
+                beam_prob_list = [beam_prob.reshape(batch_size,-1)[b,adoption_mask[b]] for b in range(batch_size)]
 
                 # update beam_offset
                 beam_offset = torch.arange(0, select_index.shape[0],
@@ -782,10 +795,10 @@ class Model(nn.Module):
                 if ~batch_finished[b]:
                     # threshold
                     threshold_of_all_steps[b].append(threshold[b])
-                    # backup beam_seq_list
+                    # beam_seq_list
                     beam_seq_of_all_steps[b].append(beam_seq_list[b])
-                else:
-                    log.info(beam_finished)
+                    # beam_prob_list
+                    beam_prob_of_all_steps[b].append(beam_prob_list[b])
 
             # update 'batch_finished': (batch_size)
             batch_finished = beam_finished.reshape(batch_size, -1).all(dim=-1)
@@ -799,7 +812,7 @@ class Model(nn.Module):
         # adjust format
         threshold_of_all_steps = [torch.hstack(threshold_of_all_steps[b]) for b in range(batch_size)]
 
-        return threshold_of_all_steps, beam_seq_of_all_steps
+        return threshold_of_all_steps, beam_seq_of_all_steps, beam_prob_of_all_steps
 
     def _compute_threshold_by_vanilla_beam_search_obsolete(self, beam_size: int,
                                                 encoder_output: Tensor, encoder_hidden: Tensor,
