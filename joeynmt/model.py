@@ -750,9 +750,6 @@ class Model(nn.Module):
                 adoption_prob = adoption_prob[:, adoption_column]
                 adoption_mask = adoption_mask[:, adoption_column]
 
-                # restore adjusted score to original score
-                beam_score += - smoothing_factor + threshold.unsqueeze(-1)
-
             # reconstruct beam origin and true word ids from flattened order
             beam_origin_index = beam_index.floor_divide(trg_vocab_size)  # (batch_size, beam_size)
             word_index = beam_index.fmod(trg_vocab_size)  # (batch_size, beam_size)
