@@ -572,7 +572,7 @@ class Model(nn.Module):
     def _compute_threshold_by_vanilla_beam_search(self, beam_size: int,
                                                   encoder_output: Tensor, encoder_hidden: Tensor, src_mask: Tensor,
                                                   temperature: float, alpha: float = 1.0,
-                                                  max_iteration: int = 10, smoothing_factor: float = 0.8) -> (np.array, np.array):
+                                                  max_iteration: int = 100, smoothing_factor: float = 0.2) -> (np.array, np.array):
         """
         Compute thresholds for soft beam policy based on vanilla_beam_search with size k.
 
@@ -634,16 +634,20 @@ class Model(nn.Module):
         finished_batch_size = 0
 
         # keeps threshold of each step
-        thresholds = []
+        threshold_of_all_steps = [[] for b in range(batch_size)]
 
-        # keeps results of each step of beam hypotheses
-        beam_seq_of_all_steps = []
+        # keeps beam hypotheses of each step
+        beam_seq_of_all_steps = [[] for b in range(batch_size)]
 
         # indicator if each beam seq is finished
         beam_finished = torch.full((batch_size, beam_size),
                                    False,
                                    dtype=torch.bool,
                                    device=device)  # (batch_size, beam_size)
+
+        # indicator if all beam seqs in each batch are finished
+        batch_finished = beam_finished.reshape(batch_size, -1).all(dim=-1)
+
         step = 0
         while not beam_finished.all() and step < max_iteration:
             step += 1
@@ -742,7 +746,7 @@ class Model(nn.Module):
             beam_origin_index = beam_index.floor_divide(trg_vocab_size)  # (batch_size, beam_size)
             word_index = beam_index.fmod(trg_vocab_size)  # (batch_size, beam_size)
 
-            # compute `arg_beam_finished`; (batch_size, beam_size)
+            # compute `beam_finished`; (batch_size, beam_size)
             beam_finished = word_index.eq(eos_index) | beam_score.eq(-np.inf)
 
             # map beam_index to selected_index in the flat representation
@@ -773,11 +777,18 @@ class Model(nn.Module):
                 # rewrite sequences that was not adopted into dummy eos sequences
                 beam_seq[~adoption_mask.view(-1)] = eos_index
 
-            # store threshold
-            thresholds.append(threshold)
+            # store threshold & beam_seq
+            for b in range(batch_size):
+                if ~batch_finished[b]:
+                    # threshold
+                    threshold_of_all_steps[b].append(threshold[b])
+                    # backup beam_seq_list
+                    beam_seq_of_all_steps[b].append(beam_seq_list[b])
+                else:
+                    log.info(beam_finished)
 
-            # backup beam_seq_list
-            beam_seq_of_all_steps.append(beam_seq_list)
+            # update 'batch_finished': (batch_size)
+            batch_finished = beam_finished.reshape(batch_size, -1).all(dim=-1)
 
             # update previous length penalty with current one
             length_penalty_prev = length_penalty
@@ -785,8 +796,10 @@ class Model(nn.Module):
         # reset decoder's status to training
         self.decoder.train()
 
-        return torch.vstack(thresholds).t(), beam_seq_of_all_steps
+        # adjust format
+        threshold_of_all_steps = [torch.hstack(threshold_of_all_steps[b]) for b in range(batch_size)]
 
+        return threshold_of_all_steps, beam_seq_of_all_steps
 
     def _compute_threshold_by_vanilla_beam_search_obsolete(self, beam_size: int,
                                                 encoder_output: Tensor, encoder_hidden: Tensor,
