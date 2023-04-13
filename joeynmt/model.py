@@ -588,8 +588,10 @@ class Model(nn.Module):
                                  is adopted with probability "(threshold - smoothing_factor)/smoothing_factor"
         :return:
             - threshold_of_all_steps: [torch.tensor(batch=0), ..., torch.tensor(batch=batch_size-1)]
-            - beam_seq_of_all_steps: [beam_seq_of_all_steps[batch=0], ..., beam_seq_of_all_steps[batch=0]]
-            - beam_prob_of_all_steps: [beam_prob_of_all_steps[batch=0], ..., beam_prob_of_all_steps[batch=0]]
+            - beam_seq_of_all_steps: [list(batch=0), ..., list(batch=batch_size-1)]
+            - beam_prob_of_all_steps: [list(batch=0), ..., list(batch=batch_size-1)]
+            Note: Each tensor or list contains information at each step (1~L),
+                  where L is the maximum step size and may vary by batch index.
         """
         # don't use dropouts during beam search
         self.decoder.eval()
@@ -832,7 +834,7 @@ class Model(nn.Module):
         :param n_best: return this many hypotheses, <= beam
         :return:
             - thresholds: torch.tensor (max_output_length),
-            - beam_seq_of_all_steps: [beam_seq_list(step=0), ..., beam_seq_list(step=max_output_length-1)]
+            - beam_seq_of_all_steps: [beam_seq(step=0), ..., beam_seq(step=max_output_length-1)]
         """
         # don't use dropouts during beam search
         self.decoder.eval()
