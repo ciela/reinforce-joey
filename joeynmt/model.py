@@ -8,6 +8,7 @@ import torch
 import torch.nn as nn
 from torch import Tensor
 import torch.nn.functional as F
+from torch.nn.utils.rnn import pad_sequence
 from torch.distributions import Categorical, Gumbel, Uniform
 from logzero import logger as log
 import numpy as np
@@ -489,12 +490,16 @@ class Model(nn.Module):
 
         # run beam search and get thresholds
         with torch.no_grad():
-            thresholds, beam_sets = self._compute_threshold_by_vanilla_beam_search(
+            thresholds, _, _ = self._compute_threshold_by_vanilla_beam_search(
                 beam_size, encoder_output, encoder_hidden, src_mask, temperature, alpha
             )
+            # padding with inf to match the longest seq
+            thresholds = pad_sequence(thresholds, batch_first=True, padding_value=float("inf"))
 
         # decode tokens with soft beam search
-        for l in range(1, max_output_length):
+        l = 0  # loop index
+
+        while not (ys_tokens[:, -1] == self.eos_index).all().item():
             # eval start
             previous_words = ys_tokens[:, -1].view(-1, 1) if hasattr(self.decoder,'_init_hidden') else ys_tokens
             logits, hidden, _, attention_vectors = self.decoder(
@@ -554,6 +559,9 @@ class Model(nn.Module):
             finished = initial_finished
             if pre_finished.size(0) > 0:
                 finished = pre_finished
+
+            # increment current length
+            l += 1
 
         ys_tokens = ys_tokens[:, 1:]
         predicted_output = self.trg_vocab.arrays_to_sentences(arrays=ys_tokens,
