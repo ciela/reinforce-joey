@@ -558,25 +558,26 @@ class Model(nn.Module):
                 # filter adopted indexes and tokens
                 filtered_indexes = to_adopt.nonzero()
                 adopted_indexes = filtered_indexes[:, 0]
-                if adopted_indexes.size(0) == 0 and not use_greedy:
+                if (adpted_size := adopted_indexes.size(0)) == 0 and not use_greedy:
                     break
-                if adopted_indexes.size(0) > batch_size * max_adoption_size:
-                    log.warning(f'Adopted token set size {adopted_indexes.size(0)} exceeds {batch_size=} * {max_adoption_size=}')
-                prev_ys_tokens = ys_tokens.index_select(0, adopted_indexes)
-                next_ys_tokens = filtered_indexes[:, 1].unsqueeze(1)
-                prev_ys_scores = ys_scores.index_select(0, adopted_indexes)
-                next_ys_scores = score[to_adopt].unsqueeze(1)
-                # append adopted tokens next to increased previous tokens
-                ys_tokens = torch.cat((prev_ys_tokens, next_ys_tokens), dim=1)
-                # add adoption scores to increased previous scores
-                ys_scores = prev_ys_scores + next_ys_scores
-                # update other adopted tensors for next decoder I/O
-                thresholds = thresholds.index_select(0, adopted_indexes)
-                encoder_output = encoder_output.index_select(0, adopted_indexes)
-                src_mask = src_mask.index_select(0, adopted_indexes)
-                log_probs = log_probs[to_adopt].unsqueeze(dim=1)
-                trg = trg.index_select(0, adopted_indexes)
-                length_norms = length_norms.index_select(0, adopted_indexes)
+                if adpted_size > 0:
+                    if adpted_size > batch_size * max_adoption_size:
+                        log.warning(f'Adopted token set size {adpted_size} exceeds {batch_size=} * {max_adoption_size=}')
+                    prev_ys_tokens = ys_tokens.index_select(0, adopted_indexes)
+                    next_ys_tokens = filtered_indexes[:, 1].unsqueeze(1)
+                    prev_ys_scores = ys_scores.index_select(0, adopted_indexes)
+                    next_ys_scores = score[to_adopt].unsqueeze(1)
+                    # append adopted tokens next to increased previous tokens
+                    ys_tokens = torch.cat((prev_ys_tokens, next_ys_tokens), dim=1)
+                    # add adoption scores to increased previous scores
+                    ys_scores = prev_ys_scores + next_ys_scores
+                    # update other adopted tensors for next decoder I/O
+                    thresholds = thresholds.index_select(0, adopted_indexes)
+                    encoder_output = encoder_output.index_select(0, adopted_indexes)
+                    src_mask = src_mask.index_select(0, adopted_indexes)
+                    log_probs = log_probs[to_adopt].unsqueeze(dim=1)
+                    trg = trg.index_select(0, adopted_indexes)
+                    length_norms = length_norms.index_select(0, adopted_indexes)
                 # adoption end
 
             if use_greedy:
