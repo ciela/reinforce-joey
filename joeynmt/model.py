@@ -523,7 +523,7 @@ class Model(nn.Module):
             log_probs_norm = log_probs / length_norms
             # eval end
 
-            # devide batched tensors into reached and unreached
+            # devide batched tensors into max length reached and unreached
             greedy = (thresholds[:, l] == float("inf")).nonzero().squeeze(1)
             # for greedy (l > L)
             if use_greedy := greedy.size(0) > 0:
