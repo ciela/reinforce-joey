@@ -498,7 +498,6 @@ class Model(nn.Module):
 
         # decode tokens with soft beam search
         l = 0  # loop index
-
         while not (ys_tokens[:, -1] == self.eos_index).all().item():
             # eval start
             previous_words = ys_tokens[:, -1].view(-1, 1) if hasattr(self.decoder,'_init_hidden') else ys_tokens
@@ -524,37 +523,76 @@ class Model(nn.Module):
             log_probs_norm = log_probs / length_norms
             # eval end
 
-            # adopion start
-            score = adoption_model(log_probs_norm, thresholds[:, l].unsqueeze(1))  # (batch_size, token_size)
-            to_adopt = score >= uniform_dist.sample(score.size()).squeeze(-1)  # (batch_size, token_size)
-            # filter adopted indexes and tokens
-            filtered_indexes = to_adopt.nonzero()
-            adopted_indexes = filtered_indexes[:, 0]
-            if adopted_indexes.size(0) == 0:
-                break
-            if adopted_indexes.size(0) > batch_size * max_adoption_size:
-                log.warning(f'Adopted token set size {adopted_indexes.size(0)} exceeds {batch_size=} * {max_adoption_size=}')
-                adopted_indexes = adopted_indexes  # TODO re-sample
-            prev_ys_tokens = ys_tokens.index_select(0, adopted_indexes)
-            next_ys_tokens = filtered_indexes[:, 1].unsqueeze(1)
-            prev_ys_scores = ys_scores.index_select(0, adopted_indexes)
-            next_ys_scores = score[to_adopt].unsqueeze(1)
-            # append adopted tokens next to increased previous tokens
-            ys_tokens = torch.cat((prev_ys_tokens, next_ys_tokens), dim=1)
-            # add adoption scores to increased previous scores
-            ys_scores = prev_ys_scores + next_ys_scores
-            # update other adopted tensors for next decoder I/O
-            thresholds = thresholds.index_select(0, adopted_indexes)
-            encoder_output = encoder_output.index_select(0, adopted_indexes)
-            src_mask = src_mask.index_select(0, adopted_indexes)
-            log_probs = log_probs[to_adopt].unsqueeze(dim=1)
-            trg = trg.index_select(0, adopted_indexes)
-            length_norms = length_norms.index_select(0, adopted_indexes)
-            distributions.append(Categorical(logits=logits.index_select(0, adopted_indexes)))
-            # adoption end
+            # devide batched tensors into reached and unreached
+            greedy = (thresholds[:, l] == float("inf")).nonzero().squeeze(1)
+            # for greedy (l > L)
+            if use_greedy := greedy.size(0) > 0:
+                greedy_ys_tokens = ys_tokens[greedy]
+                greedy_ys_scores = ys_scores[greedy]
+                greedy_thresholds = thresholds[greedy]
+                greedy_log_probs = log_probs[greedy]
+                greedy_log_probs_norm = log_probs_norm[greedy]
+                greedy_length_norms = length_norms[greedy]
+                greedy_encoder_output = encoder_output[greedy]
+                greedy_src_mask = src_mask[greedy]
+                greedy_trg = trg[greedy]
+                # just get argmax
+                greedy_next_ys_tokens = greedy_log_probs.argmax(dim=1).unsqueeze(1)
+                greedy_ys_tokens = torch.cat((greedy_ys_tokens, greedy_next_ys_tokens))
+
+            # for soft beam policy (l <= L)
+            sbp = (thresholds[:, l] != float("inf")).nonzero().squeeze(1)
+            if use_sbp := sbp.size(0) > 0:
+                ys_tokens = ys_tokens[sbp]
+                ys_scores = ys_scores[sbp]
+                thresholds = thresholds[sbp]
+                log_probs = log_probs[sbp]
+                log_probs_norm = log_probs_norm[sbp]
+                length_norms = length_norms[sbp]
+                encoder_output = encoder_output[sbp]
+                src_mask = src_mask[sbp]
+                trg = trg[sbp]
+                # adopion start
+                score = adoption_model(log_probs_norm, thresholds[:, l].unsqueeze(1))  # (batch_size, token_size)
+                to_adopt = score >= uniform_dist.sample(score.size()).squeeze(-1)  # (batch_size, token_size)
+                # filter adopted indexes and tokens
+                filtered_indexes = to_adopt.nonzero()
+                adopted_indexes = filtered_indexes[:, 0]
+                if adopted_indexes.size(0) == 0 and not use_greedy:
+                    break
+                if adopted_indexes.size(0) > batch_size * max_adoption_size:
+                    log.warning(f'Adopted token set size {adopted_indexes.size(0)} exceeds {batch_size=} * {max_adoption_size=}')
+                prev_ys_tokens = ys_tokens.index_select(0, adopted_indexes)
+                next_ys_tokens = filtered_indexes[:, 1].unsqueeze(1)
+                prev_ys_scores = ys_scores.index_select(0, adopted_indexes)
+                next_ys_scores = score[to_adopt].unsqueeze(1)
+                # append adopted tokens next to increased previous tokens
+                ys_tokens = torch.cat((prev_ys_tokens, next_ys_tokens), dim=1)
+                # add adoption scores to increased previous scores
+                ys_scores = prev_ys_scores + next_ys_scores
+                # update other adopted tensors for next decoder I/O
+                thresholds = thresholds.index_select(0, adopted_indexes)
+                encoder_output = encoder_output.index_select(0, adopted_indexes)
+                src_mask = src_mask.index_select(0, adopted_indexes)
+                log_probs = log_probs[to_adopt].unsqueeze(dim=1)
+                trg = trg.index_select(0, adopted_indexes)
+                length_norms = length_norms.index_select(0, adopted_indexes)
+                # adoption end
+
+            if use_greedy:
+                # if use sbp concatenate sbp and greedy batch tensors, if not use sbp assign greedy tensors directly
+                ys_tokens = torch.cat((ys_tokens, greedy_ys_tokens)) if use_sbp else greedy_ys_tokens
+                ys_scores = torch.cat((ys_scores, greedy_ys_scores)) if use_sbp else greedy_ys_scores
+                thresholds = torch.cat((thresholds, greedy_thresholds)) if use_sbp else greedy_thresholds
+                log_probs = torch.cat((log_probs, greedy_log_probs)) if use_sbp else greedy_log_probs
+                log_probs_norm = torch.cat((log_probs_norm, greedy_log_probs_norm)) if use_sbp else greedy_log_probs_norm
+                length_norms = torch.cat((length_norms, greedy_length_norms)) if use_sbp else greedy_length_norms
+                encoder_output = torch.cat((encoder_output, greedy_encoder_output)) if use_sbp else greedy_encoder_output
+                src_mask = torch.cat((src_mask, greedy_src_mask)) if use_sbp else greedy_src_mask
+                trg = torch.cat((trg, greedy_trg)) if use_sbp else greedy_trg
 
             # update finished if exists
-            pre_finished = (next_ys_tokens == self.eos_index).nonzero()[:, 0]
+            pre_finished = (ys_tokens[:, -1] == self.eos_index).nonzero().squeeze(1)
             # re-initialize finished
             finished = initial_finished
             if pre_finished.size(0) > 0:
