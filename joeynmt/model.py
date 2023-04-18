@@ -559,11 +559,11 @@ class Model(nn.Module):
                 # filter adopted indexes and tokens
                 filtered_indexes = to_adopt.nonzero()
                 adopted_indexes = filtered_indexes[:, 0]
-                if (adpted_size := adopted_indexes.size(0)) == 0 and not use_greedy:
+                if (adopted_size := adopted_indexes.size(0)) == 0 and not use_greedy:
                     break
-                if adpted_size > 0:
-                    if adpted_size > batch_size * max_adoption_size:
-                        log.warning(f'Adopted token set size {adpted_size} exceeds {batch_size=} * {max_adoption_size=}')
+                if adopted_size > 0:
+                    if adopted_size > batch_size * max_adoption_size:
+                        log.warning(f'Adopted token set size {adopted_size} exceeds {batch_size=} * {max_adoption_size=}')
                     prev_ys_tokens = ys_tokens.index_select(0, adopted_indexes)
                     next_ys_tokens = filtered_indexes[:, 1].unsqueeze(1)
                     prev_ys_scores = ys_scores.index_select(0, adopted_indexes)
@@ -583,7 +583,7 @@ class Model(nn.Module):
 
             if use_greedy:
                 # if use sbp concatenate sbp and greedy batch tensors, if not use sbp assign greedy tensors directly
-                catsbp = use_sbp and adpted_size > 0
+                catsbp = use_sbp and adopted_size > 0
                 ys_tokens = torch.cat((ys_tokens, greedy_ys_tokens)) if catsbp else greedy_ys_tokens
                 ys_scores = torch.cat((ys_scores, greedy_ys_scores)) if catsbp else greedy_ys_scores
                 thresholds = torch.cat((thresholds, greedy_thresholds)) if catsbp else greedy_thresholds
