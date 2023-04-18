@@ -499,6 +499,7 @@ class Model(nn.Module):
 
         # decode tokens with soft beam search
         l = 0  # loop index
+        beam_maxlen = thresholds.size(1)  # max beam length
         while not (ys_tokens[:, -1] == self.eos_index).all().item():
             # eval start
             previous_words = ys_tokens[:, -1].view(-1, 1) if hasattr(self.decoder,'_init_hidden') else ys_tokens
@@ -523,6 +524,16 @@ class Model(nn.Module):
             length_norms[ln_mask] = (5 + l) ** alpha / (5 + 1) ** alpha
             log_probs_norm = log_probs / length_norms
             # eval end
+
+            # if current length has reached to beam max length, continue with only greedy search
+            if l >= beam_maxlen:
+                # just get argmax
+                next_log_probs, next_ys_tokens = log_probs.max(dim=1)
+                ys_tokens = torch.cat((ys_tokens, next_ys_tokens.unsqueeze(1)), dim=1)
+                log_probs = next_log_probs.unsqueeze(1)
+                # increment current length and continue
+                l += 1
+                continue
 
             # devide batched tensors into max length reached and unreached
             greedy = (thresholds[:, l] == float("inf")).nonzero().squeeze(1)
