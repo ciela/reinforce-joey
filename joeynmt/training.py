@@ -87,6 +87,7 @@ class TrainManager:
         self.max_adoption_size = train_config["reinforcement_learning"]["hyperparameters"].get("max_adoption_size", 100)
         self.gumbel_loc = train_config["reinforcement_learning"]["hyperparameters"].get("gumbel_loc", 0.0)
         self.gumbel_scale = train_config["reinforcement_learning"]["hyperparameters"].get("gumbel_scale", 1.0)
+        self.margin = train_config["reinforcement_learning"]["hyperparameters"].get("margin", 0.5)
         self.tau_op = train_config["reinforcement_learning"]["hyperparameters"].get("tau_op", 0.5)
         self.sbp_policy = train_config["reinforcement_learning"]["hyperparameters"].get("sbp_policy", "on")
 
@@ -408,12 +409,13 @@ class TrainManager:
             "\tmaximum adoption set size: %d\n"
             "\tgumbel location: %.3f\n"
             "\tgumbel scale: %.3f\n"
+            "\tmargin: %.3f\n"
             "\ttau op: %.3f\n"
             "\tsbp policy: %s\n",
             self.device, self.n_gpu, self.fp16, self.batch_multiplier,
             self.batch_size//self.n_gpu if self.n_gpu > 1 else self.batch_size,
             self.batch_size * self.batch_multiplier,
-            self.max_adoption_size, self.gumbel_loc, self.gumbel_scale, self.tau_op,
+            self.max_adoption_size, self.gumbel_loc, self.gumbel_scale, self.margin, self.tau_op,
             self.sbp_policy)
 
         for epoch_no in range(self.epochs):
@@ -549,6 +551,7 @@ class TrainManager:
             beam_size=self.beam_size,
             gumbel_loc=self.gumbel_loc,
             gumbel_scale=self.gumbel_scale,
+            margin=self.margin,
             tau_op=self.tau_op,
             sbp_policy=self.sbp_policy)
 
