@@ -434,7 +434,7 @@ class Model(nn.Module):
     def soft_beam_policy_on(self, max_output_length, src: Tensor, trg: Tensor, src_mask: Tensor,
             src_length: Tensor, temperature: float, topk: int, log_probabilities: False, pickle_logs:False,
             alpha: float = 1., max_adoption_size: int = 100, beam_size: int = 5,
-            gumbel_loc: float = 0., gumbel_scale: float = 1., tau_op: float = None):
+            gumbel_loc: float = 0., gumbel_scale: float = 1., margin: float = 0.5, tau_op: float = None):
         """ Computes forward pass for Soft Beam Search
 
         Encodes source, then step by step decodes and samples token from output distribution.
@@ -452,6 +452,7 @@ class Model(nn.Module):
         :param gumbel_loc: loc parameter of gumbel distribution
         :param gumbel_scale: scale parameter of gumbel distribution
         :param max_adoption_size: maximum size of adoption set size
+        :param margin: margin from beam sequences
         :param tau_op: a dummy parameter
         :return: loss, logs
         """
@@ -554,7 +555,7 @@ class Model(nn.Module):
                 src_mask = src_mask[sbp]
                 trg = trg[sbp]
                 # adopion start
-                score = adoption_model(log_probs_norm, thresholds[:, l].unsqueeze(1))  # (batch_size, token_size)
+                score = adoption_model(log_probs_norm, thresholds[:, l].unsqueeze(1) - margin)  # (batch_size, token_size)
                 to_adopt = score >= uniform_dist.sample(score.size()).squeeze(-1)  # (batch_size, token_size)
                 # filter adopted indexes and tokens
                 filtered_indexes = to_adopt.nonzero()
