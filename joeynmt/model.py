@@ -538,7 +538,7 @@ class Model(nn.Module):
                 greedy_trg = trg[greedy]
                 # just get argmax
                 greedy_next_ys_tokens = greedy_log_probs.argmax(dim=1).unsqueeze(1)
-                greedy_ys_tokens = torch.cat((greedy_ys_tokens, greedy_next_ys_tokens))
+                greedy_ys_tokens = torch.cat((greedy_ys_tokens, greedy_next_ys_tokens), dim=1)
 
             # for soft beam policy (l <= L)
             sbp = (thresholds[:, l] != float("inf")).nonzero().squeeze(1)
