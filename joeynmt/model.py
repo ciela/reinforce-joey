@@ -1351,6 +1351,7 @@ class Model(nn.Module):
             beam_size=kwargs["beam_size"],
             gumbel_loc=kwargs.get("gumbel_loc", 0.),
             gumbel_scale=kwargs.get("gumbel_scale", 1.),
+            margin=kwargs.get("margin", 0.5),
             tau_op=kwargs.get("tau_op", 0.5),
             )
             return_tuple = (loss, logging, None, None)
