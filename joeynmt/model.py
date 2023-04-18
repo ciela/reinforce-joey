@@ -537,8 +537,9 @@ class Model(nn.Module):
                 greedy_src_mask = src_mask[greedy]
                 greedy_trg = trg[greedy]
                 # just get argmax
-                greedy_next_ys_tokens = greedy_log_probs.argmax(dim=1).unsqueeze(1)
-                greedy_ys_tokens = torch.cat((greedy_ys_tokens, greedy_next_ys_tokens), dim=1)
+                greedy_next_log_probs, greedy_next_ys_tokens = greedy_log_probs.max(dim=1)
+                greedy_ys_tokens = torch.cat((greedy_ys_tokens, greedy_next_ys_tokens.unsqueeze(1)), dim=1)
+                greedy_log_probs = greedy_next_log_probs.unsqueeze(1)
 
             # for soft beam policy (l <= L)
             sbp = (thresholds[:, l] != float("inf")).nonzero().squeeze(1)
@@ -582,15 +583,16 @@ class Model(nn.Module):
 
             if use_greedy:
                 # if use sbp concatenate sbp and greedy batch tensors, if not use sbp assign greedy tensors directly
-                ys_tokens = torch.cat((ys_tokens, greedy_ys_tokens)) if use_sbp else greedy_ys_tokens
-                ys_scores = torch.cat((ys_scores, greedy_ys_scores)) if use_sbp else greedy_ys_scores
-                thresholds = torch.cat((thresholds, greedy_thresholds)) if use_sbp else greedy_thresholds
-                log_probs = torch.cat((log_probs, greedy_log_probs)) if use_sbp else greedy_log_probs
-                log_probs_norm = torch.cat((log_probs_norm, greedy_log_probs_norm)) if use_sbp else greedy_log_probs_norm
-                length_norms = torch.cat((length_norms, greedy_length_norms)) if use_sbp else greedy_length_norms
-                encoder_output = torch.cat((encoder_output, greedy_encoder_output)) if use_sbp else greedy_encoder_output
-                src_mask = torch.cat((src_mask, greedy_src_mask)) if use_sbp else greedy_src_mask
-                trg = torch.cat((trg, greedy_trg)) if use_sbp else greedy_trg
+                catsbp = use_sbp and adpted_size > 0
+                ys_tokens = torch.cat((ys_tokens, greedy_ys_tokens)) if catsbp else greedy_ys_tokens
+                ys_scores = torch.cat((ys_scores, greedy_ys_scores)) if catsbp else greedy_ys_scores
+                thresholds = torch.cat((thresholds, greedy_thresholds)) if catsbp else greedy_thresholds
+                log_probs = torch.cat((log_probs, greedy_log_probs)) if catsbp else greedy_log_probs
+                log_probs_norm = torch.cat((log_probs_norm, greedy_log_probs_norm)) if catsbp else greedy_log_probs_norm
+                length_norms = torch.cat((length_norms, greedy_length_norms)) if catsbp else greedy_length_norms
+                encoder_output = torch.cat((encoder_output, greedy_encoder_output)) if catsbp else greedy_encoder_output
+                src_mask = torch.cat((src_mask, greedy_src_mask)) if catsbp else greedy_src_mask
+                trg = torch.cat((trg, greedy_trg)) if catsbp else greedy_trg
 
             # update finished if exists
             pre_finished = (ys_tokens[:, -1] == self.eos_index).nonzero().squeeze(1)
