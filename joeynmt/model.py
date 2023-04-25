@@ -572,7 +572,7 @@ class Model(nn.Module):
     def _compute_threshold_by_vanilla_beam_search(self, beam_size: int,
                                                   encoder_output: Tensor, encoder_hidden: Tensor, src_mask: Tensor,
                                                   temperature: float, alpha: float = 1.0,
-                                                  max_iteration: int = 100, smoothing_factor: float = 0.2) -> (np.array, np.array):
+                                                  max_iteration: int = 100, smoothing_factor: float = 0.1) -> (np.array, np.array):
         """
         Compute thresholds for soft beam policy based on vanilla_beam_search with size k.
 
@@ -750,6 +750,9 @@ class Model(nn.Module):
                 adoption_prob = adoption_prob[:, adoption_column]
                 adoption_mask = adoption_mask[:, adoption_column]
 
+                # restore adjusted score to original score
+                beam_score += - smoothing_factor + threshold.unsqueeze(-1)
+
             # reconstruct beam origin and true word ids from flattened order
             beam_origin_index = beam_index.floor_divide(trg_vocab_size)  # (batch_size, beam_size)
             word_index = beam_index.fmod(trg_vocab_size)  # (batch_size, beam_size)
@@ -773,6 +776,10 @@ class Model(nn.Module):
             # create a list-type variable of 'beam_seq' for output
             if smoothing_factor == 0:
                 beam_seq_list = [beam_seq.reshape(batch_size,beam_size,step+1)[b] for b in range(batch_size)]
+
+                # comp beam_prob (dummy)
+                beam_prob_list = [beam_score.new_ones(beam_size) for b in range(batch_size)]
+
             else:
                 beam_seq_list = [beam_seq.reshape(batch_size,-1,step+1)[b][adoption_mask[b]] for b in range(batch_size)]
 
