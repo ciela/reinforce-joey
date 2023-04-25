@@ -545,6 +545,7 @@ class Model(nn.Module):
                     log_probs = next_log_probs.unsqueeze(1)
                     # increment current length and continue
                     l += 1
+                    log.info(f'\t\t{l=:02d}: Step end (all greedy)')
                     continue
 
                 # devide batched tensors into max length reached and unreached
