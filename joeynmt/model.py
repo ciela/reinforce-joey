@@ -485,7 +485,6 @@ class Model(nn.Module):
         hidden = self.decoder._init_hidden(encoder_hidden) \
             if hasattr(self.decoder,'_init_hidden') else 0
         attention_vectors = None
-        finished = src_mask.new_zeros([0], dtype=torch.long)
         initial_finished = src_mask.new_zeros([0], dtype=torch.long)
         length_norms = encoder_output.new_zeros([batch_size, 1])
 
@@ -511,6 +510,7 @@ class Model(nn.Module):
 
             # decode tokens with soft beam search
             beam_maxlen = thresholds.size(1)  # max beam length
+            finished = initial_finished  # initialize finished sequences number
             while not (ys_tokens[:, -1] == self.eos_index).all().item():
                 log.info(f'\t\t{l=:02d}: Step start')
                 # eval start
