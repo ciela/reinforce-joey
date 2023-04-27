@@ -506,13 +506,18 @@ class Model(nn.Module):
         while seq_queue:
             # process batch inside the queue until its empty
             l, ys_tokens, ys_scores, thresholds, encoder_output, src_mask, trg, log_probs, length_norms = seq_queue.popleft()
-            log.info(f"\tBatch start, current seq queue size: {len(seq_queue)} with batch size {ys_tokens.size(0)} from step {l:02d}")
+            log.info(f"\tBatch start, queue size: {len(seq_queue)}, batch size: {ys_tokens.size(0)} from step {l:02d}")
 
             # decode tokens with soft beam search
             beam_maxlen = thresholds.size(1)  # max beam length
             finished = initial_finished  # initialize finished sequences number
             while not (ys_tokens[:, -1] == self.eos_index).all().item():
-                log.info(f'\t\t{l=:02d}: Step start')
+                log.info(
+                    f'\t\t{l=:02d}: Step start, '
+                    f'queue size: {len(seq_queue)}, '
+                    f'batch size: {ys_tokens.size(0)}, '
+                    f'cuda mem: {torch.cuda.memory_allocated(0)/1024/1024/1024:.2f}GB'
+                )
                 # eval start
                 previous_words = ys_tokens[:, -1].view(-1, 1) if hasattr(self.decoder,'_init_hidden') else ys_tokens
                 logits, hidden, _, attention_vectors = self.decoder(
@@ -580,6 +585,8 @@ class Model(nn.Module):
                     trg = trg[sbp]
                     # adopion start
                     score = adoption_model(log_probs_norm, thresholds[:, l].unsqueeze(1) - margin)  # (batch_size, token_size)
+                    log.info(f'\t\t{l=:02d}: Threshold mean={thresholds[:, l].unsqueeze(1).mean().item():.5f}, '
+                             f'std={thresholds[:, l].unsqueeze(1).std().item():.5f}')
                     to_adopt = score >= uniform_dist.sample(score.size()).squeeze(-1)  # (batch_size, token_size)
                     # filter adopted indexes and tokens
                     filtered_indexes = to_adopt.nonzero()
