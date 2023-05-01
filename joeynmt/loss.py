@@ -118,6 +118,16 @@ class ReinforceLoss(nn.Module):
                 self.bleu.extend(bleu_scores)
                 average_bleu = np.mean(self.bleu)
                 bleu_scores = [score - average_bleu for score in bleu_scores]
+        elif self.reward == "bleu_sbp":
+            # sample-wise average
+            bleu_avgs = {gold_ref: {"count": 0, "sum": 0} for gold_ref in set(gold)}
+            for bscore, gold_ref in zip(bleu_scores, gold):
+                avgmeter = bleu_avgs[gold_ref]
+                avgmeter["count"] += 1
+                avgmeter["sum"] += bscore
+                avgmeter["avg"] = avgmeter["sum"] / avgmeter["count"]
+            assert len(bleu_scores) == len(gold)
+            bleu_scores = [score - bleu_avgs[gold_ref]["avg"] for score, gold_ref in zip(bleu_scores, gold)]
         # calculate PG loss with rewards and log probs
         loss = sum([-log_prob*bleu_score \
                 for log_prob, bleu_score in zip(log_probs, bleu_scores)])
