@@ -8,6 +8,7 @@ import torch
 import torch.nn as nn
 from torch import Tensor
 import torch.nn.functional as F
+from torch.nn.utils.rnn import pad_sequence
 from torch.distributions import Categorical, Gumbel, Uniform
 from logzero import logger as log
 import numpy as np
@@ -433,7 +434,7 @@ class Model(nn.Module):
     def soft_beam_policy_on(self, max_output_length, src: Tensor, trg: Tensor, src_mask: Tensor,
             src_length: Tensor, temperature: float, topk: int, log_probabilities: False, pickle_logs:False,
             alpha: float = 1., max_adoption_size: int = 100, beam_size: int = 5,
-            gumbel_loc: float = 0., gumbel_scale: float = 1., tau_op: float = None):
+            gumbel_loc: float = 0., gumbel_scale: float = 1., margin: float = 0.5, tau_op: float = None):
         """ Computes forward pass for Soft Beam Search
 
         Encodes source, then step by step decodes and samples token from output distribution.
@@ -451,6 +452,7 @@ class Model(nn.Module):
         :param gumbel_loc: loc parameter of gumbel distribution
         :param gumbel_scale: scale parameter of gumbel distribution
         :param max_adoption_size: maximum size of adoption set size
+        :param margin: margin from beam sequences
         :param tau_op: a dummy parameter
         :return: loss, logs
         """
@@ -489,12 +491,16 @@ class Model(nn.Module):
 
         # run beam search and get thresholds
         with torch.no_grad():
-            thresholds, beam_sets = self._compute_threshold_by_vanilla_beam_search(
+            thresholds, _, _ = self._compute_threshold_by_vanilla_beam_search(
                 beam_size, encoder_output, encoder_hidden, src_mask, temperature, alpha
             )
+            # padding with inf to match the longest seq
+            thresholds = pad_sequence(thresholds, batch_first=True, padding_value=float("inf"))
 
         # decode tokens with soft beam search
-        for l in range(1, max_output_length):
+        l = 0  # loop index
+        beam_maxlen = thresholds.size(1)  # max beam length
+        while not (ys_tokens[:, -1] == self.eos_index).all().item():
             # eval start
             previous_words = ys_tokens[:, -1].view(-1, 1) if hasattr(self.decoder,'_init_hidden') else ys_tokens
             logits, hidden, _, attention_vectors = self.decoder(
@@ -519,41 +525,96 @@ class Model(nn.Module):
             log_probs_norm = log_probs / length_norms
             # eval end
 
-            # adopion start
-            score = adoption_model(log_probs_norm, thresholds[:, l].unsqueeze(1))  # (batch_size, token_size)
-            to_adopt = score >= uniform_dist.sample(score.size()).squeeze(-1)  # (batch_size, token_size)
-            # filter adopted indexes and tokens
-            filtered_indexes = to_adopt.nonzero()
-            adopted_indexes = filtered_indexes[:, 0]
-            if adopted_indexes.size(0) == 0:
-                break
-            if adopted_indexes.size(0) > batch_size * max_adoption_size:
-                log.warning(f'Adopted token set size {adopted_indexes.size(0)} exceeds {batch_size=} * {max_adoption_size=}')
-                adopted_indexes = adopted_indexes  # TODO re-sample
-            prev_ys_tokens = ys_tokens.index_select(0, adopted_indexes)
-            next_ys_tokens = filtered_indexes[:, 1].unsqueeze(1)
-            prev_ys_scores = ys_scores.index_select(0, adopted_indexes)
-            next_ys_scores = score[to_adopt].unsqueeze(1)
-            # append adopted tokens next to increased previous tokens
-            ys_tokens = torch.cat((prev_ys_tokens, next_ys_tokens), dim=1)
-            # add adoption scores to increased previous scores
-            ys_scores = prev_ys_scores + next_ys_scores
-            # update other adopted tensors for next decoder I/O
-            thresholds = thresholds.index_select(0, adopted_indexes)
-            encoder_output = encoder_output.index_select(0, adopted_indexes)
-            src_mask = src_mask.index_select(0, adopted_indexes)
-            log_probs = log_probs[to_adopt].unsqueeze(dim=1)
-            trg = trg.index_select(0, adopted_indexes)
-            length_norms = length_norms.index_select(0, adopted_indexes)
-            distributions.append(Categorical(logits=logits.index_select(0, adopted_indexes)))
-            # adoption end
+            # if current length has reached to beam max length, continue with only greedy search
+            if l >= beam_maxlen:
+                # just get argmax
+                next_log_probs, next_ys_tokens = log_probs.max(dim=1)
+                ys_tokens = torch.cat((ys_tokens, next_ys_tokens.unsqueeze(1)), dim=1)
+                log_probs = next_log_probs.unsqueeze(1)
+                # increment current length and continue
+                l += 1
+                continue
+
+            # devide batched tensors into max length reached and unreached
+            greedy = (thresholds[:, l] == float("inf")).nonzero().squeeze(1)
+            # for greedy (l > L)
+            if use_greedy := greedy.size(0) > 0:
+                greedy_ys_tokens = ys_tokens[greedy]
+                greedy_ys_scores = ys_scores[greedy]
+                greedy_thresholds = thresholds[greedy]
+                greedy_log_probs = log_probs[greedy]
+                greedy_log_probs_norm = log_probs_norm[greedy]
+                greedy_length_norms = length_norms[greedy]
+                greedy_encoder_output = encoder_output[greedy]
+                greedy_src_mask = src_mask[greedy]
+                greedy_trg = trg[greedy]
+                # just get argmax
+                greedy_next_log_probs, greedy_next_ys_tokens = greedy_log_probs.max(dim=1)
+                greedy_ys_tokens = torch.cat((greedy_ys_tokens, greedy_next_ys_tokens.unsqueeze(1)), dim=1)
+                greedy_log_probs = greedy_next_log_probs.unsqueeze(1)
+
+            # for soft beam policy (l <= L)
+            sbp = (thresholds[:, l] != float("inf")).nonzero().squeeze(1)
+            if use_sbp := sbp.size(0) > 0:
+                ys_tokens = ys_tokens[sbp]
+                ys_scores = ys_scores[sbp]
+                thresholds = thresholds[sbp]
+                log_probs = log_probs[sbp]
+                log_probs_norm = log_probs_norm[sbp]
+                length_norms = length_norms[sbp]
+                encoder_output = encoder_output[sbp]
+                src_mask = src_mask[sbp]
+                trg = trg[sbp]
+                # adopion start
+                score = adoption_model(log_probs_norm, thresholds[:, l].unsqueeze(1) - margin)  # (batch_size, token_size)
+                to_adopt = score >= uniform_dist.sample(score.size()).squeeze(-1)  # (batch_size, token_size)
+                # filter adopted indexes and tokens
+                filtered_indexes = to_adopt.nonzero()
+                adopted_indexes = filtered_indexes[:, 0]
+                if (adopted_size := adopted_indexes.size(0)) == 0 and not use_greedy:
+                    break
+                if adopted_size > 0:
+                    if adopted_size > batch_size * max_adoption_size:
+                        log.warning(f'Adopted token set size {adopted_size} exceeds {batch_size=} * {max_adoption_size=}')
+                    prev_ys_tokens = ys_tokens.index_select(0, adopted_indexes)
+                    next_ys_tokens = filtered_indexes[:, 1].unsqueeze(1)
+                    prev_ys_scores = ys_scores.index_select(0, adopted_indexes)
+                    next_ys_scores = score[to_adopt].unsqueeze(1)
+                    # append adopted tokens next to increased previous tokens
+                    ys_tokens = torch.cat((prev_ys_tokens, next_ys_tokens), dim=1)
+                    # add adoption scores to increased previous scores
+                    ys_scores = prev_ys_scores + next_ys_scores
+                    # update other adopted tensors for next decoder I/O
+                    thresholds = thresholds.index_select(0, adopted_indexes)
+                    encoder_output = encoder_output.index_select(0, adopted_indexes)
+                    src_mask = src_mask.index_select(0, adopted_indexes)
+                    log_probs = log_probs[to_adopt].unsqueeze(dim=1)
+                    trg = trg.index_select(0, adopted_indexes)
+                    length_norms = length_norms.index_select(0, adopted_indexes)
+                # adoption end
+
+            if use_greedy:
+                # if use sbp concatenate sbp and greedy batch tensors, if not use sbp assign greedy tensors directly
+                catsbp = use_sbp and adopted_size > 0
+                ys_tokens = torch.cat((ys_tokens, greedy_ys_tokens)) if catsbp else greedy_ys_tokens
+                ys_scores = torch.cat((ys_scores, greedy_ys_scores)) if catsbp else greedy_ys_scores
+                thresholds = torch.cat((thresholds, greedy_thresholds)) if catsbp else greedy_thresholds
+                log_probs = torch.cat((log_probs, greedy_log_probs)) if catsbp else greedy_log_probs
+                log_probs_norm = torch.cat((log_probs_norm, greedy_log_probs_norm)) if catsbp else greedy_log_probs_norm
+                length_norms = torch.cat((length_norms, greedy_length_norms)) if catsbp else greedy_length_norms
+                encoder_output = torch.cat((encoder_output, greedy_encoder_output)) if catsbp else greedy_encoder_output
+                src_mask = torch.cat((src_mask, greedy_src_mask)) if catsbp else greedy_src_mask
+                trg = torch.cat((trg, greedy_trg)) if catsbp else greedy_trg
 
             # update finished if exists
-            pre_finished = (next_ys_tokens == self.eos_index).nonzero()[:, 0]
+            pre_finished = (ys_tokens[:, -1] == self.eos_index).nonzero().squeeze(1)
             # re-initialize finished
             finished = initial_finished
             if pre_finished.size(0) > 0:
                 finished = pre_finished
+
+            # increment current length
+            l += 1
 
         ys_tokens = ys_tokens[:, 1:]
         predicted_output = self.trg_vocab.arrays_to_sentences(arrays=ys_tokens,
@@ -1290,6 +1351,7 @@ class Model(nn.Module):
             beam_size=kwargs["beam_size"],
             gumbel_loc=kwargs.get("gumbel_loc", 0.),
             gumbel_scale=kwargs.get("gumbel_scale", 1.),
+            margin=kwargs.get("margin", 0.5),
             tau_op=kwargs.get("tau_op", 0.5),
             )
             return_tuple = (loss, logging, None, None)
