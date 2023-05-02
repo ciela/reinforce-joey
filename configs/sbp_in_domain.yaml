@@ -62,6 +62,7 @@ training:
       baseline: "average_reward_baseline"
       gumbel_loc: 0.0
       gumbel_scale: 1.0
+      margin: 0.5
       tau_op: 0.5
       sbp_policy: "off"
 
