@@ -58,13 +58,14 @@ training:
       alpha: 1
       reward: "bleu"
       samples: 5
-      max_adoption_size: 100
+      max_adoption_size: 5
+      adoption_size_penalty: 1.0
       baseline: "average_reward_baseline"
       gumbel_loc: 0.0
-      gumbel_scale: 1.0
-      margin: 0.5
+      gumbel_scale: 0.2
+      margin: 0.1
       tau_op: 0.5
-      sbp_policy: "off"
+      sbp_policy: "on"
 
 model:
   initializer: "xavier"
