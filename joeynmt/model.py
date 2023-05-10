@@ -538,7 +538,8 @@ class Model(nn.Module):
                 # find length normalization mask (True for not EOSed sequence)
                 ln_mask = ~(logits[:, self.eos_index] == 0).unsqueeze(1)
                 # apply length normalization with current length l
-                length_norms[ln_mask] = (5 + l) ** alpha / (5 + 1) ** alpha
+                # TODO rethink initial index value of l
+                length_norms[ln_mask] = (5 + (l + 1)) ** alpha / (5 + 1) ** alpha
                 log_probs_norm = log_probs / length_norms
                 # eval end
 
@@ -595,30 +596,6 @@ class Model(nn.Module):
                         log.info(f'\t\t{l=:02d}: Step end with zero sample size')
                         break
                     if adopted_size > 0:
-                        if adopted_size > decode_limit:
-                            log.warning(f'\t\t{l=:02d}: Adopted token set size {adopted_size} exceeds {decode_limit}={batch_size}*{max_adoption_size}')
-                            # enqueue overflowed batches
-                            offset = decode_limit
-                            for _ in range(adopted_size // decode_limit):
-                                to_be_queued = adopted_indexes[offset:(offset + decode_limit)]
-                                log.warning(f'\t\t{l=:02d}: Queued: {to_be_queued}')
-                                seq_queue.append((
-                                    l,
-                                    ys_tokens.index_select(0, to_be_queued),
-                                    ys_scores.index_select(0, to_be_queued),
-                                    thresholds.index_select(0, to_be_queued),
-                                    encoder_output.index_select(0, to_be_queued),
-                                    src_mask.index_select(0, to_be_queued),
-                                    trg.index_select(0, to_be_queued),
-                                    log_probs.index_select(0, to_be_queued),
-                                    length_norms.index_select(0, to_be_queued),
-                                ))
-                                offset += decode_limit
-                            # just process first batch
-                            adopted_indexes = adopted_indexes[:decode_limit]
-                            filtered_indexes = filtered_indexes[:decode_limit]
-                            to_adopt[:, :] = False
-                            to_adopt[adopted_indexes, filtered_indexes[:, 1]] = True
                         prev_ys_tokens = ys_tokens.index_select(0, adopted_indexes)
                         next_ys_tokens = filtered_indexes[:, 1].unsqueeze(1)
                         prev_ys_scores = ys_scores.index_select(0, adopted_indexes)
@@ -634,6 +611,35 @@ class Model(nn.Module):
                         log_probs = log_probs[to_adopt].unsqueeze(dim=1)
                         trg = trg.index_select(0, adopted_indexes)
                         length_norms = length_norms.index_select(0, adopted_indexes)
+                        if adopted_size > decode_limit:
+                            log.warning(f'\t\t{l=:02d}: Adopted token set size {adopted_size} exceeds {decode_limit}={batch_size}*{max_adoption_size}')
+                            # enqueue overflowed batches
+                            offset = decode_limit
+                            for _ in range(adopted_size // decode_limit):
+                                limit = offset + decode_limit
+                                to_be_queued = adopted_indexes[offset:limit]
+                                log.warning(f'\t\t{l=:02d}: Queued: {to_be_queued}')
+                                seq_queue.append((
+                                    l + 1,
+                                    ys_tokens[offset:limit].clone(),
+                                    ys_scores[offset:limit].clone(),
+                                    thresholds[offset:limit].clone(),
+                                    encoder_output[offset:limit].clone(),
+                                    src_mask[offset:limit].clone(),
+                                    trg[offset:limit].clone(),
+                                    log_probs[offset:limit].clone(),
+                                    length_norms[offset:limit].clone(),
+                                ))
+                                offset += decode_limit
+                            # filter initial batched tensors
+                            ys_tokens = ys_tokens[:decode_limit]
+                            ys_scores = ys_scores[:decode_limit]
+                            thresholds = thresholds[:decode_limit]
+                            encoder_output = encoder_output[:decode_limit]
+                            src_mask = src_mask[:decode_limit]
+                            trg = trg[:decode_limit]
+                            log_probs = log_probs[:decode_limit]
+                            length_norms = length_norms[:decode_limit]
 
                 if use_greedy:
                     # if use sbp concatenate sbp and greedy batch tensors, if not use sbp assign greedy tensors directly
