@@ -491,8 +491,6 @@ class Model(nn.Module):
         initial_finished = src_mask.new_zeros([0], dtype=torch.long)
         length_norms = encoder_output.new_zeros([batch_size, 1])
         alive_batches = torch.arange(batch_size, device=dev)
-        alive_batches_uniq = alive_batches.unique()
-        prev_adopted_size = torch.zeros_like(alive_batches)  # previsous adopt size
 
         # run beam search and get thresholds
         with torch.no_grad():
@@ -598,17 +596,10 @@ class Model(nn.Module):
                     trg = trg.index_select(0, adopted_indexes)
                     length_norms = length_norms.index_select(0, adopted_indexes)
                     alive_batches = alive_batches.index_select(0, adopted_indexes)
-                    # compute adoption size gradient
+                    # compute adoption size penalty
                     uniqs, counts = alive_batches.unique(return_counts=True)
                     adopt_size = torch.stack([sum_probs.masked_select(alive_batches == i).sum() for i in uniqs])
-                    log.debug(f'{uniqs=}, {alive_batches_uniq=}, {counts=}, {prev_adopted_size=}')
-                    if uniqs.size(0) != alive_batches_uniq.size(0):
-                        _, diff = torch.cat((uniqs, alive_batches_uniq)).unique(return_counts=True)
-                        prev_adopted_size = prev_adopted_size[diff > 1]
-                    (-adoption_size_penalty * (adopt_size - prev_adopted_size)).sum().backward(retain_graph=True)
-                    # update previous adopted size
-                    alive_batches_uniq = uniqs
-                    prev_adopted_size = counts
+                    (-adoption_size_penalty * torch.pow(adopt_size - counts, 2).sum()).backward(retain_graph=True)
                 # adoption end
 
             if use_greedy:
