@@ -490,6 +490,9 @@ class Model(nn.Module):
         finished = src_mask.new_zeros([0], dtype=torch.long)
         initial_finished = src_mask.new_zeros([0], dtype=torch.long)
         length_norms = encoder_output.new_zeros([batch_size, 1])
+        alive_batches = torch.arange(batch_size, device=dev)
+        alive_batches_uniq = alive_batches.unique()
+        prev_adopted_size = torch.zeros_like(alive_batches)  # previsous adopt size
 
         # run beam search and get thresholds
         with torch.no_grad():
@@ -502,7 +505,6 @@ class Model(nn.Module):
         # decode tokens with soft beam search
         l = 0  # loop index
         beam_maxlen = thresholds.size(1)  # max beam length
-        prev_adopted_size = 0  # previsous adopted size
         while not (ys_tokens[:, -1] == self.eos_index).all().item():
             # eval start
             previous_words = ys_tokens[:, -1].view(-1, 1) if hasattr(self.decoder,'_init_hidden') else ys_tokens
@@ -591,15 +593,23 @@ class Model(nn.Module):
                     thresholds = thresholds.index_select(0, adopted_indexes)
                     encoder_output = encoder_output.index_select(0, adopted_indexes)
                     src_mask = src_mask.index_select(0, adopted_indexes)
+                    sum_probs = log_probs.exp().sum(dim=1).index_select(0, adopted_indexes)
                     log_probs = log_probs[to_adopt].unsqueeze(dim=1)
                     trg = trg.index_select(0, adopted_indexes)
                     length_norms = length_norms.index_select(0, adopted_indexes)
+                    alive_batches = alive_batches.index_select(0, adopted_indexes)
+                    # compute adoption size gradient
+                    uniqs, counts = alive_batches.unique(return_counts=True)
+                    adopt_size = torch.stack([sum_probs.masked_select(alive_batches == i).sum() for i in uniqs])
+                    log.debug(f'{uniqs=}, {alive_batches_uniq=}, {counts=}, {prev_adopted_size=}')
+                    if uniqs.size(0) != alive_batches_uniq.size(0):
+                        _, diff = torch.cat((uniqs, alive_batches_uniq)).unique(return_counts=True)
+                        prev_adopted_size = prev_adopted_size[diff > 1]
+                    (-adoption_size_penalty * (adopt_size - prev_adopted_size)).sum().backward(retain_graph=True)
+                    # update previous adopted size
+                    alive_batches_uniq = uniqs
+                    prev_adopted_size = counts
                 # adoption end
-                # compute adoption size grads and backward
-                adoptsize_loss = -adoption_size_penalty * (adopted_size - prev_adopted_size) * log_probs
-                adoptsize_loss.mean().backward(retain_graph=True)
-                # update previous adopted size
-                prev_adopted_size = adopted_size
 
             if use_greedy:
                 # if use sbp concatenate sbp and greedy batch tensors, if not use sbp assign greedy tensors directly
