@@ -599,7 +599,7 @@ class Model(nn.Module):
                     # compute adoption size penalty
                     uniqs, counts = alive_batches.unique(return_counts=True)
                     adopt_size = torch.stack([sum_probs.masked_select(alive_batches == i).sum() for i in uniqs])
-                    (-adoption_size_penalty * torch.pow(adopt_size - counts, 2).sum()).backward(retain_graph=True)
+                    (adoption_size_penalty * torch.pow(adopt_size - counts, 2).sum()).backward(retain_graph=True)
                 # adoption end
 
             if use_greedy:
