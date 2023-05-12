@@ -259,7 +259,7 @@ class Model(nn.Module):
 
     def soft_beam_policy_off(self, max_output_length, src: Tensor, trg: Tensor, src_mask: Tensor,
             src_length: Tensor, temperature: float, topk: int, log_probabilities: False, pickle_logs:False,
-            alpha: float = 1., max_adoption_size: int = 100, beam_size: int = 5,
+            alpha: float = 1., max_adoption_size: int = 100, adoption_size_penalty: float = 1.0, beam_size: int = 5,
             gumbel_loc: float = 0., gumbel_scale: float = 1., tau_op: float = 0.5):
         """ Computes forward pass for Soft Beam Search
 
@@ -278,6 +278,7 @@ class Model(nn.Module):
         :param gumbel_loc: loc parameter of gumbel distribution
         :param gumbel_scale: scale parameter of gumbel distribution
         :param max_adoption_size: maximum size of adoption set size
+        :param adoption_size_penalty: adoption size penalty ratio
         :param tau_op: off-policy adjustment coefficients
         :return: loss, logs
         """
@@ -433,7 +434,7 @@ class Model(nn.Module):
 
     def soft_beam_policy_on(self, max_output_length, src: Tensor, trg: Tensor, src_mask: Tensor,
             src_length: Tensor, temperature: float, topk: int, log_probabilities: False, pickle_logs:False,
-            alpha: float = 1., max_adoption_size: int = 100, beam_size: int = 5,
+            alpha: float = 1., max_adoption_size: int = 100, adoption_size_penalty: float = 1.0, beam_size: int = 5,
             gumbel_loc: float = 0., gumbel_scale: float = 1., margin: float = 0.5, tau_op: float = None):
         """ Computes forward pass for Soft Beam Search
 
@@ -452,6 +453,7 @@ class Model(nn.Module):
         :param gumbel_loc: loc parameter of gumbel distribution
         :param gumbel_scale: scale parameter of gumbel distribution
         :param max_adoption_size: maximum size of adoption set size
+        :param adoption_size_penalty: adoption size penalty ratio
         :param margin: margin from beam sequences
         :param tau_op: a dummy parameter
         :return: loss, logs
@@ -488,6 +490,7 @@ class Model(nn.Module):
         finished = src_mask.new_zeros([0], dtype=torch.long)
         initial_finished = src_mask.new_zeros([0], dtype=torch.long)
         length_norms = encoder_output.new_zeros([batch_size, 1])
+        alive_batches = torch.arange(batch_size, device=dev)
 
         # run beam search and get thresholds
         with torch.no_grad():
@@ -588,9 +591,15 @@ class Model(nn.Module):
                     thresholds = thresholds.index_select(0, adopted_indexes)
                     encoder_output = encoder_output.index_select(0, adopted_indexes)
                     src_mask = src_mask.index_select(0, adopted_indexes)
+                    sum_probs = log_probs.exp().sum(dim=1).index_select(0, adopted_indexes)
                     log_probs = log_probs[to_adopt].unsqueeze(dim=1)
                     trg = trg.index_select(0, adopted_indexes)
                     length_norms = length_norms.index_select(0, adopted_indexes)
+                    alive_batches = alive_batches.index_select(0, adopted_indexes)
+                    # compute adoption size penalty
+                    uniqs, counts = alive_batches.unique(return_counts=True)
+                    adopt_size = torch.stack([sum_probs.masked_select(alive_batches == i).sum() for i in uniqs])
+                    (adoption_size_penalty * torch.pow(adopt_size - counts, 2).sum()).backward(retain_graph=True)
                 # adoption end
 
             if use_greedy:
@@ -1348,6 +1357,7 @@ class Model(nn.Module):
             log_probabilities=kwargs["log_probabilities"],
             pickle_logs=kwargs["pickle_logs"],
             max_adoption_size=kwargs["max_adoption_size"],
+            adoption_size_penalty=kwargs["adoption_size_penalty"],
             beam_size=kwargs["beam_size"],
             gumbel_loc=kwargs.get("gumbel_loc", 0.),
             gumbel_scale=kwargs.get("gumbel_scale", 1.),

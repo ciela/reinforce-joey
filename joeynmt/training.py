@@ -85,6 +85,7 @@ class TrainManager:
         self.pickle_logs = train_config["reinforcement_learning"].get("pickle_logs", False)
         self.topk = train_config["reinforcement_learning"].get("topk", 20)
         self.max_adoption_size = train_config["reinforcement_learning"]["hyperparameters"].get("max_adoption_size", 100)
+        self.adoption_size_penalty = train_config["reinforcement_learning"]["hyperparameters"].get("adoption_size_penalty", 0.0)
         self.gumbel_loc = train_config["reinforcement_learning"]["hyperparameters"].get("gumbel_loc", 0.0)
         self.gumbel_scale = train_config["reinforcement_learning"]["hyperparameters"].get("gumbel_scale", 1.0)
         self.margin = train_config["reinforcement_learning"]["hyperparameters"].get("margin", 0.5)
@@ -407,6 +408,7 @@ class TrainManager:
             "\tbatch size per device: %d\n"
             "\ttotal batch size (w. parallel & accumulation): %d\n"
             "\tmaximum adoption set size: %d\n"
+            "\tadoption size penalty ratio: %d\n"
             "\tgumbel location: %.3f\n"
             "\tgumbel scale: %.3f\n"
             "\tmargin: %.3f\n"
@@ -415,8 +417,8 @@ class TrainManager:
             self.device, self.n_gpu, self.fp16, self.batch_multiplier,
             self.batch_size//self.n_gpu if self.n_gpu > 1 else self.batch_size,
             self.batch_size * self.batch_multiplier,
-            self.max_adoption_size, self.gumbel_loc, self.gumbel_scale, self.margin, self.tau_op,
-            self.sbp_policy)
+            self.max_adoption_size, self.adoption_size_penalty, self.gumbel_loc, self.gumbel_scale,
+            self.margin, self.tau_op, self.sbp_policy)
 
         for epoch_no in range(self.epochs):
             logger.info("EPOCH %d", epoch_no + 1)
@@ -548,6 +550,7 @@ class TrainManager:
             log_probabilities=self.log_probabilities,
             pickle_logs=self.pickle_logs,
             max_adoption_size=self.max_adoption_size,
+            adoption_size_penalty=self.adoption_size_penalty,
             beam_size=self.beam_size,
             gumbel_loc=self.gumbel_loc,
             gumbel_scale=self.gumbel_scale,
