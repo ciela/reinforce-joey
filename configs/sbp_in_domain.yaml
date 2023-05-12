@@ -56,7 +56,7 @@ training:
     hyperparameters:
       temperature: 1
       alpha: 1
-      reward: "bleu"
+      reward: "bleu_sbp"
       samples: 5
       max_adoption_size: 100
       baseline: "average_reward_baseline"
