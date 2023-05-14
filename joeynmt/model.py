@@ -562,7 +562,6 @@ class Model(nn.Module):
                     greedy_ys_scores = ys_scores[greedy]
                     greedy_thresholds = thresholds[greedy]
                     greedy_log_probs = log_probs[greedy]
-                    greedy_log_probs_norm = log_probs_norm[greedy]
                     greedy_length_norms = length_norms[greedy]
                     greedy_encoder_output = encoder_output[greedy]
                     greedy_src_mask = src_mask[greedy]
@@ -648,7 +647,6 @@ class Model(nn.Module):
                     ys_scores = torch.cat((ys_scores, greedy_ys_scores)) if catsbp else greedy_ys_scores
                     thresholds = torch.cat((thresholds, greedy_thresholds)) if catsbp else greedy_thresholds
                     log_probs = torch.cat((log_probs, greedy_log_probs)) if catsbp else greedy_log_probs
-                    log_probs_norm = torch.cat((log_probs_norm, greedy_log_probs_norm)) if catsbp else greedy_log_probs_norm
                     length_norms = torch.cat((length_norms, greedy_length_norms)) if catsbp else greedy_length_norms
                     encoder_output = torch.cat((encoder_output, greedy_encoder_output)) if catsbp else greedy_encoder_output
                     src_mask = torch.cat((src_mask, greedy_src_mask)) if catsbp else greedy_src_mask
