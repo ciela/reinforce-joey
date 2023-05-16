@@ -11,6 +11,8 @@ data:
   max_sent_length: 62
   src_vocab: "pretrained_iwslt14/src_vocab.txt"
   trg_vocab: "pretrained_iwslt14/trg_vocab.txt"
+  monitor_size: 100
+  monitor_freq: 10
 
 testing:
   beam_size: 5
