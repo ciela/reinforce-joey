@@ -163,7 +163,8 @@ def make_data_iter(dataset: Dataset,
                    batch_size: int,
                    batch_type: str = "sentence",
                    train: bool = False,
-                   shuffle: bool = False) -> Iterator:
+                   shuffle: bool = False,
+                   sort_within_batch: bool = False) -> Iterator:
     """
     Returns a torchtext iterator for a torchtext dataset.
 
@@ -184,7 +185,7 @@ def make_data_iter(dataset: Dataset,
         data_iter = BucketIterator(
             repeat=False, sort=False, dataset=dataset,
             batch_size=batch_size, batch_size_fn=batch_size_fn,
-            train=True, sort_within_batch=True,
+            train=True, sort_within_batch=sort_within_batch,
             sort_key=lambda x: len(x.src), shuffle=shuffle)
     else:
         # don't sort/shuffle for validation/inference
