@@ -35,6 +35,7 @@ from joeynmt.data import load_data, make_data_iter
 from joeynmt.builders import build_optimizer, build_scheduler, \
     build_gradient_clipper
 from joeynmt.prediction import test
+from logzero import logger as log
 
 # for fp16 training
 try:
@@ -420,6 +421,15 @@ class TrainManager:
             self.max_adoption_size, self.adoption_size_penalty, self.gumbel_loc, self.gumbel_scale,
             self.margin, self.tau_op, self.sbp_policy)
 
+        # sample monitoring data
+        data_cfg = self.config["data"]
+        monitor_size = data_cfg.get("monitor_size", -1)
+        if monitor_size > -1:
+            ratio = monitor_size / len(train_data)
+            monitor_data, _ = train_data.split(
+                split_ratio=[ratio, 1 - ratio])
+            monitor_freq = data_cfg.get("monitor_freq", 10)
+
         for epoch_no in range(self.epochs):
             logger.info("EPOCH %d", epoch_no + 1)
 
@@ -454,6 +464,10 @@ class TrainManager:
 
                 # get batch loss
                 batch_loss += self._train_step(batch)
+
+                # monitor on sampled training data
+                if monitor_size > -1 and (i + 1) % monitor_freq == 0:
+                    self._monitor(monitor_data, epoch_no)
 
                 # update!
                 if (i + 1) % self.batch_multiplier == 0:
@@ -614,6 +628,35 @@ class TrainManager:
         self.stats.total_tokens += batch.ntokens
 
         return norm_batch_loss.item()
+
+    def _monitor(self, samples, epoch_no):
+        monit_start_time = time.time()
+        monit_score, monit_loss, monit_ppl, _, _, _, _, _, _, _ = \
+            validate_on_data(
+                batch_size=self.eval_batch_size,
+                data=samples,
+                config=self.config,
+                eval_metric=self.eval_metric,
+                level=self.level, model=self.model,
+                use_cuda=self.use_cuda,
+                max_output_length=self.max_output_length,
+                compute_loss=True,
+                beam_size=1,                # greedy validations
+                batch_type=self.eval_batch_type,
+                postprocess=True,           # always remove BPE for validation
+                bpe_type=self.bpe_type,     # "subword-nmt" or "sentencepiece"
+                sacrebleu=self.sacrebleu,   # sacrebleu options
+                n_gpu=self.n_gpu,
+                critic=self.critic
+            )
+        duration = time.time() - monit_start_time
+        log.info(
+            'Monitering BLEU on samled training data at epoch %3d, '
+            'step %8d: %s: %6.2f, loss: %8.4f, ppl: %8.4f, '
+            'duration: %.4fs', epoch_no + 1, self.stats.steps,
+            self.eval_metric, monit_score, monit_loss,
+            monit_ppl, duration)
+        return duration
 
     def _validate(self, valid_data, epoch_no):
         valid_start_time = time.time()
