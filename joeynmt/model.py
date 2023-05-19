@@ -628,6 +628,7 @@ class Model(nn.Module):
         ys_tokens = ys_tokens[:, 1:]
         predicted_output = self.trg_vocab.arrays_to_sentences(arrays=ys_tokens,
                                                         cut_at_eos=True)
+        avg_len = sum([len(output) for output in predicted_output]) / len(predicted_output)
         gold_output = self.trg_vocab.arrays_to_sentences(arrays=trg,
                                                     cut_at_eos=True)
         predicted_strings = [join_strings(wordlist) for wordlist in predicted_output]
@@ -636,7 +637,7 @@ class Model(nn.Module):
         batch_loss, rewards, old_bleus = self.loss_function(predicted_strings, gold_strings,  ys_scores)
         return (batch_loss, log_peakiness(self.pad_index, self.trg_vocab, topk, distributions,
         trg, batch_size, max_output_length, gold_strings, predicted_strings, rewards, old_bleus)) \
-        if log_probabilities else (batch_loss, [])
+        if log_probabilities else (batch_loss, avg_len)
 
 
     def _compute_threshold_by_vanilla_beam_search(self, beam_size: int,
@@ -1345,7 +1346,7 @@ class Model(nn.Module):
 
         elif return_type == "sbp":
             policy = self.soft_beam_policy_on if kwargs["sbp_policy"] == "on" else self.soft_beam_policy_off
-            loss, logging = policy(
+            loss, avg_len = policy(
             src=kwargs["src"],
             trg=kwargs["trg"],
             src_mask=kwargs["src_mask"],
@@ -1364,7 +1365,7 @@ class Model(nn.Module):
             margin=kwargs.get("margin", 0.5),
             tau_op=kwargs.get("tau_op", 0.5),
             )
-            return_tuple = (loss, logging, None, None)
+            return_tuple = (loss, avg_len, None, None)
 
         elif return_type == "a2c":
             loss, logging = self.ned_a2c(
