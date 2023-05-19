@@ -481,7 +481,6 @@ class Model(nn.Module):
         ys_tokens = encoder_output.new_full([batch_size, 1], self.bos_index, dtype=torch.long)
         ys_scores = encoder_output.new_zeros([batch_size, 1])
         trg_mask = src_mask.new_ones([1, 1, 1])
-        distributions = []
         log_probs = 0
         # init hidden state in case of using rnn decoder
         hidden = self.decoder._init_hidden(encoder_hidden) \
@@ -634,10 +633,8 @@ class Model(nn.Module):
         predicted_strings = [join_strings(wordlist) for wordlist in predicted_output]
         gold_strings = [join_strings(wordlist) for wordlist in gold_output]
         # get reinforce loss
-        batch_loss, rewards, old_bleus = self.loss_function(predicted_strings, gold_strings,  ys_scores)
-        return (batch_loss, log_peakiness(self.pad_index, self.trg_vocab, topk, distributions,
-        trg, batch_size, max_output_length, gold_strings, predicted_strings, rewards, old_bleus)) \
-        if log_probabilities else (batch_loss, avg_len)
+        batch_loss, _, _ = self.loss_function(predicted_strings, gold_strings, ys_scores)
+        return batch_loss, avg_len
 
 
     def _compute_threshold_by_vanilla_beam_search(self, beam_size: int,
