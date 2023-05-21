@@ -35,7 +35,6 @@ from joeynmt.data import load_data, make_data_iter
 from joeynmt.builders import build_optimizer, build_scheduler, \
     build_gradient_clipper
 from joeynmt.prediction import test
-from logzero import logger as log
 
 # for fp16 training
 try:
@@ -456,6 +455,7 @@ class TrainManager:
             self.model.zero_grad()
             epoch_loss = 0
             batch_loss = 0
+            sum_avglen = 0
 
             for i, batch in enumerate(iter(train_iter)):
                 # create a Batch object from torchtext batch
@@ -463,11 +463,14 @@ class TrainManager:
                               use_cuda=self.use_cuda)
 
                 # get batch loss
-                batch_loss += self._train_step(batch)
+                current_loss, avg_len = self._train_step(batch)
+                batch_loss += current_loss
+                if avg_len is not None:
+                    sum_avglen += avg_len
 
                 # monitor on sampled training data
                 if monitor_size > -1 and (i + 1) % monitor_freq == 0:
-                    self._monitor(monitor_data, epoch_no)
+                    self._monitor(monitor_data, epoch_no, sum_avglen / (i + 1))
 
                 # update!
                 if (i + 1) % self.batch_multiplier == 0:
@@ -550,7 +553,7 @@ class TrainManager:
 
         # get loss
         if self.reinforcement_learning:
-            batch_loss, distribution, _, _ = self.model(
+            batch_loss, avg_len, _, _ = self.model(
             return_type=self.method,
             critic=self.critic,
             src=batch.src, trg=batch.trg,
@@ -627,9 +630,9 @@ class TrainManager:
         # increment token counter
         self.stats.total_tokens += batch.ntokens
 
-        return norm_batch_loss.item()
+        return norm_batch_loss.item(), avg_len if self.reinforcement_learning and self.method == "sbp" else None
 
-    def _monitor(self, samples, epoch_no):
+    def _monitor(self, samples, epoch_no, avg_len):
         monit_start_time = time.time()
         monit_score, monit_loss, monit_ppl, _, _, _, _, _, _, _ = \
             validate_on_data(
@@ -650,12 +653,12 @@ class TrainManager:
                 critic=self.critic
             )
         duration = time.time() - monit_start_time
-        log.info(
+        logger.info(
             'Monitering BLEU on samled training data at epoch %3d, '
             'step %8d: %s: %6.2f, loss: %8.4f, ppl: %8.4f, '
-            'duration: %.4fs', epoch_no + 1, self.stats.steps,
+            'duration: %.4fs, avglen: %.2f', epoch_no + 1, self.stats.steps,
             self.eval_metric, monit_score, monit_loss,
-            monit_ppl, duration)
+            monit_ppl, duration, avg_len)
         return duration
 
     def _validate(self, valid_data, epoch_no):
